@@ -1,14 +1,14 @@
 {
   "name": "Notentrainer",
   "short_name": "Noten",
-  "description": "Noten lesen üben mit dem Digitalpiano",
+  "description": "Noten, Akkorde, Quintenzirkel, Tonleitern, Improvisation und Jazz am Digitalpiano üben",
   "lang": "de",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "orientation": "any",
-  "background_color": "#1d2433",
+  "background_color": "#0b0c10",
   "theme_color": "#1d2433",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
