@@ -64,7 +64,8 @@ const binStr = buf => { const u = new Uint8Array(buf); let s = ''; for (let i = 
 // ---------- Song-Modell: steps = [{ t (s), notes: [{ midi, dur, staff, vel }] }] ----------
 function stepsFromOSMD(osmd) {
   const sheet = osmd.Sheet;
-  const bpm = sheet.DefaultStartTempoInBpm || sheet.userStartTempoInBPM || 100;
+  let bpm = sheet.DefaultStartTempoInBpm || sheet.userStartTempoInBPM || 100;
+  if (!(bpm >= 30 && bpm <= 400)) bpm = 100; // unplausible Angaben (z. B. Lesefehler) nicht übernehmen
   const c = osmd.cursor;
   c.reset();
   const steps = [];

@@ -26,7 +26,7 @@ RUN python3 -m venv /venv
 COPY requirements.txt /tmp/requirements.txt
 RUN /venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 WORKDIR /app
-COPY app.py /app/app.py
+COPY app.py musicxml_fix.py /app/
 ENV PYTHONUNBUFFERED=1 DATA_DIR=/data STATIC_DIR=/site
 EXPOSE 8000
 CMD ["/venv/bin/uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

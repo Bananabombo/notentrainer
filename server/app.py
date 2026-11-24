@@ -23,6 +23,8 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from musicxml_fix import clean_title, postprocess
+
 DATA = Path(os.environ.get("DATA_DIR", "./data"))
 STATIC = Path(os.environ.get("STATIC_DIR", ".."))
 AUDIVERIS = os.environ.get("AUDIVERIS", "/opt/audiveris/bin/Audiveris")
@@ -357,13 +359,16 @@ def run_omr(uid: int, sid: str):
         results = sorted(work.rglob("*.mxl"))
         if not results:
             raise RuntimeError("Keine Noten erkannt – am besten klappt ein gerader, scharfer Scan (300 dpi).")
-        mxl = merge_or_first(results)
-        shutil.copy(mxl, d / "score.mxl")
-        title = r["title"]
-        t = xml_title(d / "score.mxl")
-        if t and (not title or title == Path(r["file_name"] or "").stem):
-            title = t
-        meta = f"Erkannt aus {'PDF' if r['orig_type'] == 'pdf' else 'Foto'}" + (f" · {len(results)} Sätze" if len(results) > 1 else "")
+        title = clean_title(r["title"])
+        try:
+            info = postprocess(results, d / "score.mxl", title)
+        except Exception as e:  # noqa: BLE001 – Nachbearbeitung darf die Erkennung nicht verhindern
+            (work / "postprocess.log").write_text(repr(e))
+            shutil.copy(merge_or_first(results), d / "score.mxl")
+            info = {}
+        if not title:
+            title = xml_title(d / "score.mxl") or "Unbenannt"
+        meta = f"Erkannt aus {'PDF' if r['orig_type'] == 'pdf' else 'Foto'}" + (f" · {info['measures']} Takte" if info.get("measures") else "")
         q("UPDATE songs SET type='mxl', status='ready', title=?, meta=?, error=NULL, updated=? WHERE id=?", title, meta, now(), sid)
     except subprocess.TimeoutExpired:
         q("UPDATE songs SET status='omr-failed', error=?, updated=? WHERE id=?", "Zeitüberschreitung bei der Erkennung", now(), sid)
@@ -383,7 +388,7 @@ def xml_title(mxl: Path):
             name = next(n for n in z.namelist() if n.endswith((".xml", ".musicxml")) and not n.startswith("META-INF"))
             txt = z.read(name).decode("utf-8", "ignore")[:20000]
         m = re.search(r"<work-title>([^<]+)</work-title>", txt) or re.search(r"<movement-title>([^<]+)</movement-title>", txt)
-        t = m.group(1).strip() if m else ""
+        t = clean_title(m.group(1)) if m else ""
         return t if t and t.lower() not in ("score", "title") else ""
     except Exception:  # noqa: BLE001
         return ""
