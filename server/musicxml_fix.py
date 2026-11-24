@@ -133,8 +133,24 @@ def remove_junk_text(root: ET.Element) -> int:
                         measure.remove(d); removed += 1
                     else:
                         for w in words:   # „Allegro moderato J“ → „Allegro moderato“ (J = gelesenes Notensymbol)
-                            w.text = re.sub(r"\s+[JjI|]\s*$", "", w.text or "")
+                            w.text = normalize_jump(re.sub(r"\s+[JjI|]\s*$", "", w.text or ""))
     return removed
+
+
+def normalize_jump(t: str) -> str:
+    """Sprungangaben vereinheitlichen, damit sie erkannt werden: „DS. cl Coda“ → „D.S. al Coda“."""
+    s = t.strip()
+    m = re.fullmatch(r"(?i)d\s*\.?\s*([sc])\s*\.?\s*(?:([ae]l|cl|al)\s*(coda|fine|fne|flne))?\.?", s)
+    if m:
+        out = "D." + m.group(1).upper() + "."
+        if m.group(3):
+            out += " al " + ("Coda" if m.group(3).lower().startswith("c") else "Fine")
+        return out
+    if re.fullmatch(r"(?i)to\s*coda\.?", s):
+        return "To Coda"
+    if re.fullmatch(r"(?i)f[il1]ne\.?", s):
+        return "Fine"
+    return t
 
 
 def _key_alters(fifths: int) -> dict:
