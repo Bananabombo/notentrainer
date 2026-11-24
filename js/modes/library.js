@@ -116,7 +116,7 @@ export function writeMidi(steps, title) {
     const ch = n.staff ? 1 : 0;
     hands[n.staff ? 1 : 0].push({ tick: on, order: 1, data: [0x90 | ch, n.midi, Math.round((n.vel || 0.7) * 127)] }, { tick: off, order: 0, data: [0x80 | ch, n.midi, 0] });
   }
-  const tracks = [track(conductor, title || 'Notentrainer'), track(hands[0], 'Rechte Hand'), track(hands[1], 'Linke Hand')];
+  const tracks = [track(conductor, title || 'Tonika'), track(hands[0], 'Rechte Hand'), track(hands[1], 'Linke Hand')];
   const header = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, tracks.length, (PPQ >> 8) & 255, PPQ & 255];
   return new Blob([new Uint8Array([...header, ...tracks.flat()])], { type: 'audio/midi' });
 }

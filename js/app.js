@@ -5,7 +5,7 @@ import { audio } from './core/audio.js';
 import { prefs, progress } from './core/store.js';
 import { setNaming } from './core/music.js';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 
 const MODES = {
   notes:   { title: 'Noten lesen',   icon: 'note',   hue: 245, desc: 'Zufällige Noten im Violin- und Bassschlüssel erkennen und spielen.', load: () => import('./modes/notes.js') },
@@ -144,7 +144,7 @@ function globalSettings() {
     field('Lautstärke (Browser)', (() => { const r = h('input', { type: 'range', min: 0, max: 1, step: 0.05 }); r.value = prefs.volume; r.oninput = () => audio.setVolume(+r.value); return r; })()),
     field('Mikrofon-Empfindlichkeit', (() => { const r = h('input', { type: 'range', min: 1, max: 10, step: 1 }); r.value = prefs.micSens; r.oninput = () => { prefs.micSens = +r.value; }; return r; })()),
     field('Erscheinungsbild', segmented([['auto', 'System'], ['light', 'Hell'], ['dark', 'Dunkel']], prefs.theme, v => { prefs.theme = v; applyTheme(); })),
-    h('div.field-hint', 'Notentrainer ' + VERSION)
+    h('div.field-hint', 'Tonika ' + VERSION)
   ];
 }
 
@@ -170,7 +170,7 @@ function renderHome() {
         h('div.badge-icon', icon(m.icon)), title, h('p', m.desc),
         h('div.meta', p && p.total ? [h('span', h('b', p.total), ' geübt'), p.best ? h('span', 'Serie ', h('b', p.best)) : ''] : h('span', 'Noch nicht geübt')));
     })),
-    h('footer.home-foot', h('span', 'Notentrainer ' + VERSION), h('span.spacer'),
+    h('footer.home-foot', h('span', 'Tonika ' + VERSION), h('span.spacer'),
       h('a', { href: 'https://github.com/Bananabombo/notentrainer', style: { color: 'inherit' } }, 'GitHub'))
   );
 }

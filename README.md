@@ -1,8 +1,8 @@
-# 🎹 Notentrainer
+# 🎹 Tonika
 
 Web-App zum Klavierlernen am Digitalpiano (entwickelt für das Roland FP-30X) – minimalistisch, animiert, ohne Installation.
 
-**App öffnen:** https://bananabombo.github.io/notentrainer/
+**App öffnen:** https://tonika.hohendorff.org (Spiegel: https://bananabombo.github.io/notentrainer/)
 
 ## Lernbereiche
 | Bereich | Inhalt |
@@ -50,6 +50,9 @@ python3 -m http.server 8765
 ```
 Dann `http://localhost:8765` in Chrome öffnen.
 
-## Geplant: Raspberry-Pi-Server
+## Hosting auf dem Raspberry Pi
+`deploy/` enthält eine `docker-compose.yml` (nginx:alpine, `127.0.0.1:3300`), erreichbar über den Cloudflare-Tunnel. Update auf dem Pi: `git pull` – fertig, kein Build nötig.
+
+## Geplant: Server-Funktionen
 - Benutzerkonten mit Login, Fortschritt und Bibliothek pro Konto (heute: lokal im Browser)
 - Automatische Notenerkennung für PDF/Fotos (z. B. Audiveris → MusicXML → MIDI)
