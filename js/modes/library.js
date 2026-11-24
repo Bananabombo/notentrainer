@@ -4,8 +4,9 @@ import { h, icon, burst, toast, segmented, field, setNum, loadScript, sheet } fr
 import { input } from '../core/input.js';
 import { audio } from '../core/audio.js';
 import { Keyboard } from '../core/keyboard.js';
-import { library, account, bumpProgress } from '../core/store.js';
+import { library, account, bumpProgress, persisted } from '../core/store.js';
 import { midiName } from '../core/music.js';
+import { playOrder, measuresFromOSMD, applyFixes, describeJumps } from '../core/repeats.js';
 import { go } from '../app.js';
 
 const OSMD_URL = 'https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.8.9/build/opensheetmusicdisplay.min.js';
@@ -62,17 +63,19 @@ function statusTag(s) {
 const binStr = buf => { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return s; };
 
 // ---------- Song-Modell: steps = [{ t (s), notes: [{ midi, dur, staff, vel }] }] ----------
-function stepsFromOSMD(osmd) {
+function stepsFromOSMD(osmd, fix) {
   const sheet = osmd.Sheet;
   let bpm = sheet.DefaultStartTempoInBpm || sheet.userStartTempoInBPM || 100;
   if (!(bpm >= 30 && bpm <= 400)) bpm = 100; // unplausible Angaben (z. B. Lesefehler) nicht übernehmen
   const c = osmd.cursor;
   c.reset();
-  const steps = [];
+  // 1) Noten der Reihe nach einsammeln – mit Takt und Cursor-Position
+  const linear = [];
   const wholeSec = 4 * 60 / bpm;
-  let guard = 0;
+  let guard = 0, ci = 0;
   while (!c.Iterator.EndReached && guard++ < 20000) {
     const ts = c.Iterator.currentTimeStamp.RealValue;
+    const mi = c.Iterator.CurrentMeasureIndex;
     const notes = [];
     for (const ve of c.Iterator.CurrentVoiceEntries || []) {
       for (const n of ve.Notes) {
@@ -83,11 +86,27 @@ function stepsFromOSMD(osmd) {
         notes.push({ midi: n.halfTone + 12, dur: len * wholeSec, staff: staffIdx > 0 ? 1 : 0, vel: 0.7 });
       }
     }
-    steps.push({ t: ts * wholeSec, notes });
-    c.next();
+    linear.push({ ts, mi, ci, notes });
+    c.next(); ci++;
   }
   c.reset();
-  return { steps, bpm };
+  // 2) Takte in Abspielreihenfolge (Wiederholungen, Volten, D.C./D.S., Coda) aneinanderreihen
+  const ms = sheet.SourceMeasures;
+  const startOf = i => ms[i].AbsoluteTimestamp.RealValue;
+  const lenOf = i => i + 1 < ms.length ? startOf(i + 1) - startOf(i) : ms[i].Duration.RealValue;
+  const byMeasure = new Map();
+  for (const st of linear) { if (!byMeasure.has(st.mi)) byMeasure.set(st.mi, []); byMeasure.get(st.mi).push(st); }
+  let order, info = null;
+  try { info = applyFixes(measuresFromOSMD(sheet), fix); order = playOrder(info); } catch (e) { console.warn('Wiederholungen nicht auswertbar', e); order = null; }
+  if (!order || !order.length) order = ms.map((_, i) => i);
+  const steps = [];
+  let tAcc = 0;
+  for (const mi of order) {
+    for (const st of byMeasure.get(mi) || []) steps.push({ t: (tAcc + st.ts - startOf(mi)) * wholeSec, ci: st.ci, mi, notes: st.notes });
+    tAcc += lenOf(mi);
+  }
+  const repeats = order.length !== ms.length || order.some((m, i) => m !== i);
+  return { steps, bpm, repeats, playedMeasures: order.length, jumps: info ? describeJumps(info) : null, measures: ms.length };
 }
 function stepsFromMidi(buf) {
   const M = window.Midi.Midi || window.Midi;
@@ -224,11 +243,14 @@ function player(root, ctx, id) {
   const handSeg = segmented([['both', 'Beide Hände'], ['0', 'Rechts'], ['1', 'Links']], 'both', v => { hand = v; if (mode === 'wait') { stopAll(); startWait(); } });
   const exportBtn = h('button.btn.ghost', { onclick: exportMidi, hidden: true }, icon('download'), 'MIDI');
   const origBtn = h('button.btn.ghost', { onclick: () => showOriginal(), hidden: true }, icon('eye'), 'Original');
+  const jumpBtn = h('button.btn.ghost', { onclick: () => jumpSheet(), hidden: true }, icon('refresh'), 'Sprünge');
+  const jumpFixes = persisted('library.jumpFixes', {});
+  let osmdRef = null, lastInfo = null;
 
   root.append(
     h('section.stage.grow',
       h('div.player-bar', playBtn, practiceBtn, handSeg,
-        h('label.tempo', icon('metronome'), tempoIn, tempoLabel), h('span.spacer'), origBtn, exportBtn),
+        h('label.tempo', icon('metronome'), tempoIn, tempoLabel), h('span.spacer'), jumpBtn, origBtn, exportBtn),
       timeline, display,
       h('div.feedback', msg, h('div.stats', { style: { gridTemplateColumns: 'repeat(3, minmax(70px, 1fr))', flex: '0 0 auto' } },
         h('div.stat', okEl, h('div.l', 'richtig')), h('div.stat', badEl, h('div.l', 'daneben')), h('div.stat', progEl, h('div.l', 'Fortschritt')))),
@@ -262,15 +284,26 @@ function player(root, ctx, id) {
     const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(box, { autoResize: true, backend: 'svg', drawTitle: true, followCursor: true, drawPartNames: false, cursorsOptions: [{ type: 0, color: '#4f46e5', alpha: 0.45, follow: true }] });
     await osmd.load(song.type === 'mxl' ? binStr(song.data) : new TextDecoder().decode(song.data));
     osmd.render();
-    const r = stepsFromOSMD(osmd);
-    steps = r.steps;
+    osmdRef = osmd;
+    const r = stepsFromOSMD(osmd, jumpFixes[song.id]);
+    steps = r.steps; lastInfo = r;
+    jumpBtn.hidden = false;
+    if (r.repeats) toast(`Mit Wiederholungen: ${r.playedMeasures} Takte`);
+    if (r.jumps && r.jumps.jump === 'ds' && !r.jumps.segno && !jumpFixes[song.id]) setTimeout(() => toast('„D.S.“ gefunden, aber kein Segno – unter „Sprünge“ kannst du es nachtragen'), 2500);
     osmd.cursor.show();
     view = {
       kind: 'score',
       cursorIndex: 0,
+      // i = Schritt in Abspielreihenfolge; der Cursor springt zur zugehörigen Stelle in den Noten
       goto(i) {
-        if (i < this.cursorIndex) { osmd.cursor.reset(); this.cursorIndex = 0; }
-        while (this.cursorIndex < i && !osmd.cursor.Iterator.EndReached) { osmd.cursor.next(); this.cursorIndex++; }
+        const target = steps[i] ? steps[i].ci : 0;
+        if (target === this.cursorIndex) return;
+        const cur = osmd.cursor;
+        if (target < this.cursorIndex) { cur.reset(); this.cursorIndex = 0; }
+        const far = target - this.cursorIndex > 3;
+        if (far) cur.hide();
+        while (this.cursorIndex < target && !cur.Iterator.EndReached) { cur.next(); this.cursorIndex++; }
+        if (far) cur.show();
       },
       reset() { osmd.cursor.reset(); this.cursorIndex = 0; },
       destroy() { try { osmd.clear(); } catch {} }
@@ -374,6 +407,34 @@ function player(root, ctx, id) {
       }, 4000);
     }
     renderStatus(); poll();
+  }
+  function jumpSheet() {
+    if (!osmdRef || !lastInfo) return;
+    const j = lastInfo.jumps || {}, fix = jumpFixes[song.id] || {};
+    const num = (v, ph) => h('input.input', { type: 'number', min: 1, max: lastInfo.measures, placeholder: ph, value: v ?? '' });
+    const segno = num(fix.segno ?? j.segno, 'z. B. 63'), jumpAt = num(fix.jumpAt ?? j.jumpAt, 'z. B. 126');
+    const toCoda = num(fix.toCoda ?? j.toCoda, 'z. B. 101'), coda = num(fix.coda ?? j.coda, 'z. B. 127');
+    const kind = segmented([['ds', 'D.S. (zum Segno)'], ['dc', 'D.C. (von vorn)']], fix.jump || j.jump || 'ds', v => { kindV = v; segno.disabled = v === 'dc'; });
+    let kindV = fix.jump || j.jump || 'ds';
+    const apply = f => {
+      if (f) jumpFixes[song.id] = f; else { delete jumpFixes[song.id]; }
+      stopAll();
+      const r = stepsFromOSMD(osmdRef, jumpFixes[song.id]);
+      steps = r.steps; lastInfo = r; pos = 0; view.reset(); setProgress();
+      msg.textContent = `${steps.filter(s => s.notes.length).length} Schritte · ${Math.round(totalTime())} s`;
+      toast(`Abspielreihenfolge: ${r.playedMeasures} Takte`);
+    };
+    const val = el => el.value ? Math.max(1, Math.min(lastInfo.measures, Math.round(+el.value))) : null;
+    const s = sheet('Wiederholungen & Sprünge', [
+      h('p.muted', { style: { marginTop: 0 } }, `Wiederholungszeichen und Volten werden automatisch gespielt (${j.repeats || 0} gefunden). Hat die Notenerkennung Sprungzeichen übersehen, trag hier die Taktnummern ein.`),
+      field('Sprung am Ende von Takt', jumpAt), field('Art', kind),
+      field('Segno (𝄋) in Takt', segno), field('„To Coda“ (𝄌) in Takt', toCoda, 'Hier springt der zweite Durchgang zur Coda.'), field('Coda beginnt in Takt', coda),
+      h('div.row', { style: { marginTop: '8px' } },
+        h('button.btn.primary', { onclick: () => { apply({ jumpAt: val(jumpAt), jump: kindV, segno: kindV === 'ds' ? val(segno) : null, toCoda: val(toCoda), coda: val(coda) }); s.close(); } }, 'Übernehmen'),
+        h('button.btn.ghost', { onclick: () => { apply({ off: true }); s.close(); } }, 'Sprünge ignorieren'),
+        jumpFixes[song.id] ? h('button.btn.ghost', { onclick: () => { apply(null); s.close(); } }, 'Zurücksetzen') : '')
+    ]);
+    segno.disabled = kindV === 'dc';
   }
   async function showOriginal() {
     try {
