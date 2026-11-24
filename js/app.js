@@ -5,7 +5,7 @@ import { audio } from './core/audio.js';
 import { prefs, progress, account, library } from './core/store.js';
 import { setNaming } from './core/music.js';
 
-export const VERSION = '0.3.2';
+export const VERSION = '0.3.3';
 
 const MODES = {
   notes:   { title: 'Noten lesen',   icon: 'note',   hue: 245, desc: 'Zufällige Noten im Violin- und Bassschlüssel erkennen und spielen.', load: () => import('./modes/notes.js') },

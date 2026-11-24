@@ -23,7 +23,8 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from musicxml_fix import clean_title, postprocess
+from musicxml_fix import clean_title, postprocess, read_mxl
+import pdf_meta
 
 DATA = Path(os.environ.get("DATA_DIR", "./data"))
 STATIC = Path(os.environ.get("STATIC_DIR", ".."))
@@ -58,6 +59,8 @@ CREATE TABLE IF NOT EXISTS songs (
   title TEXT, meta TEXT, type TEXT, file_name TEXT, size INTEGER, added INTEGER,
   status TEXT, orig_type TEXT, error TEXT, updated INTEGER);
 """)
+if "composer" not in [r[1] for r in db.execute("PRAGMA table_info(songs)")]:
+    db.execute("ALTER TABLE songs ADD COLUMN composer TEXT")
 
 
 def q(sql, *args):
@@ -232,7 +235,7 @@ def song_dir(uid: int, sid: str) -> Path:
 def song_json(r):
     return {"id": r["id"], "title": r["title"], "meta": r["meta"], "type": r["type"], "fileName": r["file_name"],
             "size": r["size"], "added": r["added"], "status": r["status"], "origType": r["orig_type"],
-            "error": r["error"], "updated": r["updated"]}
+            "error": r["error"], "updated": r["updated"], "composer": r["composer"] or ""}
 
 
 def get_song(uid: int, sid: str):
@@ -249,7 +252,14 @@ def list_songs(user=Depends(current_user)):
 
 @app.get("/api/songs/{sid}")
 def song_meta(sid: str, user=Depends(current_user)):
-    return song_json(get_song(user["id"], sid))
+    out = song_json(get_song(user["id"], sid))
+    rep = song_dir(user["id"], sid) / "omr-report.json"
+    if rep.exists():
+        try:
+            out["report"] = json.loads(rep.read_text())
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 
 
 @app.post("/api/songs")
@@ -277,8 +287,10 @@ async def upload_song(file: UploadFile = File(...), meta: str = Form(...), user=
             f.write(chunk)
     needs_omr = typ in ("pdf", "image")
     status = "omr-queued" if needs_omr and Path(AUDIVERIS).exists() else ("omr-pending" if needs_omr else "ready")
-    q("INSERT OR REPLACE INTO songs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", sid, user["id"], str(m.get("title") or file.filename)[:200],
-      str(m.get("meta") or "")[:200], typ, file.filename, size, int(m.get("added") or now()), status, typ, None, now())
+    q("INSERT OR REPLACE INTO songs (id, user_id, title, meta, type, file_name, size, added, status, orig_type, error, updated, composer) "
+      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", sid, user["id"], str(m.get("title") or file.filename)[:200],
+      str(m.get("meta") or "")[:200], typ, file.filename, size, int(m.get("added") or now()), status, typ, None, now(),
+      str(m.get("composer") or "")[:200])
     if status == "omr-queued":
         jobs.put((user["id"], sid))
     return song_json(get_song(user["id"], sid))
@@ -306,6 +318,8 @@ async def edit_song(sid: str, request: Request, user=Depends(current_user)):
     body = await request.json()
     if "title" in body:
         q("UPDATE songs SET title=?, updated=? WHERE id=?", str(body["title"])[:200], now(), sid)
+    if "composer" in body:
+        q("UPDATE songs SET composer=?, updated=? WHERE id=?", str(body["composer"])[:200], now(), sid)
     return song_json(get_song(user["id"], sid))
 
 
@@ -352,28 +366,75 @@ def run_omr(uid: int, sid: str):
     shutil.copy(src, inp)
     q("UPDATE songs SET status='omr-running', updated=? WHERE id=?", now(), sid)
     env = dict(os.environ, JAVA_OPTS=os.environ.get("OMR_JAVA_OPTS", "-Xmx2g"))
+    meta = pdf_meta.from_pdf(src) if r["orig_type"] == "pdf" else {}
     try:
-        p = subprocess.run(["nice", "-n", "10", AUDIVERIS, "-batch", "-export", "-output", str(work), "--", str(inp)],
+        p = subprocess.run(["nice", "-n", "10", AUDIVERIS, "-batch", "-export", "-output", str(work), *audiveris_options(src, r["orig_type"]), "--", str(inp)],
                            capture_output=True, text=True, timeout=int(os.environ.get("OMR_TIMEOUT", "1200")), env=env)
         (work / "audiveris.log").write_text((p.stdout or "") + "\n" + (p.stderr or ""))
         results = sorted(work.rglob("*.mxl"))
         if not results:
             raise RuntimeError("Keine Noten erkannt – am besten klappt ein gerader, scharfer Scan (300 dpi).")
+        # Titel/Komponist: Textebene des PDFs, unleserliche Zeichen mit der Lesung von Audiveris reparieren
+        credits = []
+        for res in results:
+            try:
+                credits += re.findall(r"<(?:credit-words|movement-title|creator)[^>]*>([^<]+)<", read_mxl(res))
+            except Exception:  # noqa: BLE001
+                pass
+        for k in ("title", "composer"):
+            if meta.get(k):
+                meta[k] = pdf_meta.repair(meta[k], credits + [meta.get("composer_raw", "")])
+        if meta.get("composer"):
+            meta["composer"] = pdf_meta.clean_composer(meta["composer"])
+        file_stem = Path(r["file_name"] or "").stem
         title = clean_title(r["title"])
+        # Dateiname nur behalten, wenn er „sprechend“ ist – sonst den Titel vom Notenblatt
+        if meta.get("title") and (not title or title == clean_title(file_stem) or looks_technical(title)):
+            title = meta["title"]
+        meta["title"] = title
         try:
-            info = postprocess(results, d / "score.mxl", title)
+            info = postprocess(results, d / "score.mxl", title, meta)
         except Exception as e:  # noqa: BLE001 – Nachbearbeitung darf die Erkennung nicht verhindern
             (work / "postprocess.log").write_text(repr(e))
             shutil.copy(merge_or_first(results), d / "score.mxl")
             info = {}
         if not title:
             title = xml_title(d / "score.mxl") or "Unbenannt"
-        meta = f"Erkannt aus {'PDF' if r['orig_type'] == 'pdf' else 'Foto'}" + (f" · {info['measures']} Takte" if info.get("measures") else "")
-        q("UPDATE songs SET type='mxl', status='ready', title=?, meta=?, error=NULL, updated=? WHERE id=?", title, meta, now(), sid)
+        unsure = info.get("uncertain") or []
+        meta_txt = f"Erkannt aus {'PDF' if r['orig_type'] == 'pdf' else 'Foto'}" + (f" · {info['measures']} Takte" if info.get("measures") else "") \
+            + (f" · {len(unsure)} unsicher" if unsure else "")
+        (d / "omr-report.json").write_text(json.dumps(info))
+        composer = info.get("composer") or r["composer"] or ""
+        q("UPDATE songs SET type='mxl', status='ready', title=?, meta=?, composer=?, error=NULL, updated=? WHERE id=?",
+          title, meta_txt, composer, now(), sid)
     except subprocess.TimeoutExpired:
         q("UPDATE songs SET status='omr-failed', error=?, updated=? WHERE id=?", "Zeitüberschreitung bei der Erkennung", now(), sid)
     except Exception as e:  # noqa: BLE001
         q("UPDATE songs SET status='omr-failed', error=?, updated=? WHERE id=?", str(e)[:300], now(), sid)
+
+
+def looks_technical(name: str) -> bool:
+    """Dateinamen wie „IMSLP57501-PMLP07983-Burgmueller_25_…“ oder „scan_0001“ sind keine guten Titel."""
+    n = name or ""
+    return bool(re.search(r"(imslp|pmlp|scan|img|dsc|^\d+$|\d{4,})", n, re.I)) or n.count("_") >= 2 or len(n) > 60
+
+
+def audiveris_options(src: Path, orig_type: str) -> list[str]:
+    opts = ["-option", "org.audiveris.omr.text.Language.defaultSpecification=deu+eng",
+            "-option", "org.audiveris.omr.sheet.ProcessingSwitches.fingerings=true"]
+    if orig_type == "pdf":
+        # 400 dpi statt 300: deutlich weniger Fehler bei kleinen Zeichen (Vorzeichen, Schlüssel, Fingersätze),
+        # begrenzt auf ~19 Mio. Pixel pro Seite (Grenze von Audiveris)
+        dpi = 400
+        try:
+            if pdf_meta.pymupdf:
+                doc = pdf_meta.pymupdf.open(src)
+                area = max(pg.rect.width * pg.rect.height for pg in doc) / (72 * 72)
+                dpi = max(300, min(400, int((19_000_000 / area) ** 0.5)))
+        except Exception:  # noqa: BLE001
+            pass
+        opts += ["-option", f"org.audiveris.omr.image.ImageLoading.pdfResolution={dpi}"]
+    return opts
 
 
 def merge_or_first(results):

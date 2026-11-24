@@ -30,13 +30,13 @@ export async function importFile(file) {
   const type = detect(file, buf);
   if (!type) throw new Error(`${file.name}: Format nicht erkannt`);
   let title = file.name.replace(/\.[^.]+$/, '');
-  let meta = '';
+  let meta = '', composer = '';
   if (type === 'musicxml') {
     const txt = new TextDecoder().decode(buf);
     const m = txt.match(/<work-title>([^<]+)<\/work-title>/) || txt.match(/<movement-title>([^<]+)<\/movement-title>/);
     if (m) title = m[1].trim();
     const c = txt.match(/<creator[^>]*type="composer"[^>]*>([^<]+)</);
-    if (c) meta = c[1].trim();
+    if (c) composer = c[1].trim();
   } else if (type === 'midi') {
     try {
       await loadScript(MIDI_URL);
@@ -47,7 +47,7 @@ export async function importFile(file) {
       meta = `${n} Noten · ${Math.round(mid.duration)} s`;
     } catch {}
   }
-  const song = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()), title, meta, type, fileName: file.name, size: file.size, data: buf, added: Date.now(), status: (type === 'pdf' || type === 'image') ? 'omr-pending' : 'ready' };
+  const song = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()), title, meta, composer, type, fileName: file.name, size: file.size, data: buf, added: Date.now(), status: (type === 'pdf' || type === 'image') ? 'omr-pending' : 'ready' };
   const saved = await library.put(song);
   return saved && saved.id ? saved : song;
 }
@@ -215,6 +215,7 @@ function list(root, ctx) {
       const tagCls = s.status !== 'ready' ? '.wait' : s.type === 'midi' ? '.midi' : '.xml';
       grid.append(h('div.song', { style: { '--i': i }, onclick: () => go('#/library/' + s.id) },
         h('h5', s.title),
+        s.composer ? h('div.composer', s.composer) : '',
         h('div.sub', s.meta || s.fileName),
         h('div.row', { style: { gap: '6px', marginTop: '4px' } },
           h('span.tag' + tagCls, TYPE_LABEL[s.type] || s.type),
@@ -259,7 +260,7 @@ function player(root, ctx, id) {
   (async () => {
     song = await library.get(id).catch(() => null);
     if (!song) { display.innerHTML = ''; display.append(h('div.empty', 'Stück nicht gefunden.')); return; }
-    ctx.setTitle(song.title, TYPE_LABEL[song.type]);
+    ctx.setTitle(song.title, song.composer || TYPE_LABEL[song.type]);
     try {
       if (song.type === 'musicxml' || song.type === 'mxl') await setupScore();
       else if (song.type === 'midi') await setupRoll();
@@ -269,6 +270,8 @@ function player(root, ctx, id) {
       const all = steps.flatMap(s => s.notes.map(n => n.midi));
       kb.fit(all);
       msg.textContent = `${steps.filter(s => s.notes.length).length} Schritte · ${Math.round(totalTime())} s`;
+      const unsure = song.report && song.report.uncertain || [];
+      if (unsure.length) msg.textContent += ` · unsicher erkannt: Takt ${unsure.slice(0, 6).join(', ')}${unsure.length > 6 ? ' …' : ''}`;
     } catch (e) {
       console.error(e);
       display.innerHTML = ''; display.append(h('div.empty', 'Die Datei konnte nicht gelesen werden: ' + e.message));

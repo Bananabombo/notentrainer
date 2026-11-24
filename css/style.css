@@ -451,3 +451,4 @@ select { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px soli
 @keyframes pulseRing { 0% { box-shadow: 0 0 0 0 var(--accent-soft); } 100% { box-shadow: 0 0 0 10px transparent; } }
 .migrate { display: flex; align-items: center; gap: 12px; }
 .stage.migrate { flex-direction: row; align-items: center; flex-wrap: wrap; text-align: left; }
+.song .composer { font-size: 13.5px; color: var(--text); opacity: .75; margin-top: -2px; }
