@@ -1,10 +1,10 @@
 // Modus: Bibliothek – Noten (MusicXML/MXL) und MIDI hochladen, anhören, im Warte-Modus mitspielen, als MIDI exportieren.
-// PDF und Fotos werden gespeichert; die automatische Notenerkennung (OMR) folgt mit dem Raspberry-Pi-Server.
-import { h, icon, burst, toast, segmented, field, setNum, loadScript } from '../core/ui.js';
+// PDF und Fotos: mit Konto erkennt der Tonika-Server sie automatisch (Audiveris) und liefert MusicXML zurück.
+import { h, icon, burst, toast, segmented, field, setNum, loadScript, sheet } from '../core/ui.js';
 import { input } from '../core/input.js';
 import { audio } from '../core/audio.js';
 import { Keyboard } from '../core/keyboard.js';
-import { library, bumpProgress } from '../core/store.js';
+import { library, account, bumpProgress } from '../core/store.js';
 import { midiName } from '../core/music.js';
 import { go } from '../app.js';
 
@@ -47,8 +47,17 @@ export async function importFile(file) {
     } catch {}
   }
   const song = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()), title, meta, type, fileName: file.name, size: file.size, data: buf, added: Date.now(), status: (type === 'pdf' || type === 'image') ? 'omr-pending' : 'ready' };
-  await library.put(song);
-  return song;
+  const saved = await library.put(song);
+  return saved && saved.id ? saved : song;
+}
+const OMR_ACTIVE = st => st === 'omr-queued' || st === 'omr-running';
+function statusTag(s) {
+  if (s.status === 'omr-queued') return h('span.tag.run', 'In Warteschlange');
+  if (s.status === 'omr-running') return h('span.tag.run', 'Wird erkannt …');
+  if (s.status === 'omr-failed') return h('span.tag.fail', 'Nicht erkannt');
+  if (s.status === 'omr-pending') return h('span.tag.wait', account.server ? 'Anmelden zum Erkennen' : 'Erkennung braucht Server');
+  if (s.origType && s.origType !== s.type) return h('span.tag', 'aus ' + (TYPE_LABEL[s.origType] || s.origType));
+  return '';
 }
 const binStr = buf => { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return s; };
 
@@ -135,7 +144,18 @@ function list(root, ctx) {
   const fileIn = h('input', { type: 'file', multiple: true, accept: '.xml,.musicxml,.mxl,.mid,.midi,.pdf,image/*', hidden: true, onchange: () => handle(fileIn.files) });
   const drop = h('div.dropzone', { onclick: () => fileIn.click() },
     icon('upload'), h('b', 'Noten hochladen'),
-    h('div', 'MusicXML (.musicxml, .mxl), MIDI (.mid) – oder PDF/Foto für die spätere Notenerkennung'));
+    h('div', account.user ? 'MusicXML (.musicxml, .mxl), MIDI (.mid), PDF oder Foto – PDFs und Fotos werden automatisch erkannt' : 'MusicXML (.musicxml, .mxl), MIDI (.mid) – oder PDF/Foto für die Notenerkennung'));
+  const migrateBox = h('div');
+  let pollTimer = 0, alive = true;
+  if (account.user) library.localCount().then(n => {
+    if (!n || !alive) return;
+    const btn = h('button.btn.primary', { onclick: async () => {
+      btn.disabled = true;
+      try { await library.migrateLocal((i, total) => { btn.textContent = `Übertrage ${i}/${total} …`; }); toast('Ins Konto übernommen'); migrateBox.innerHTML = ''; refresh(); }
+      catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Erneut versuchen'; }
+    } }, icon('cloud'), 'Ins Konto übernehmen');
+    migrateBox.append(h('section.stage.migrate', h('div', { style: { flex: 1 } }, h('b', `${n} Stück${n > 1 ? 'e' : ''} nur in diesem Browser`), h('div.muted', { style: { fontSize: '13.5px' } }, 'Übernimm sie in dein Konto, dann sind sie überall verfügbar und PDFs/Fotos werden erkannt.')), btn));
+  });
   ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
   ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
   drop.addEventListener('drop', e => handle(e.dataTransfer.files));
@@ -143,14 +163,17 @@ function list(root, ctx) {
   root.append(
     h('section.stage', drop, fileIn,
       h('div.info-box', h('b', 'Tipp: '), 'Aus MuseScore, Sibelius, Finale oder Dorico als ', h('b', 'MusicXML'), ' exportieren – dann sind alle Informationen (Noten, Hände, Tempo) dabei. ',
-        'PDFs und Fotos werden schon gespeichert; die automatische Umwandlung in MIDI kommt mit dem Raspberry-Pi-Server.')),
+        account.user ? 'PDFs und Fotos erkennt dein Tonika-Server automatisch – am besten gerade, scharf und gut ausgeleuchtet (Scan mit 300 dpi ist ideal).'
+          : account.server ? 'Melde dich an (oben rechts), damit PDFs und Fotos automatisch in Noten umgewandelt und deine Stücke im Konto gespeichert werden.'
+          : 'PDFs und Fotos werden gespeichert; die automatische Erkennung läuft auf dem Tonika-Server (tonika.hohendorff.org).')),
+    migrateBox,
     h('div.row', h('div.label-caps', { style: { margin: '8px 4px 0' } }, 'Deine Stücke'), h('span.spacer'),
       h('button.btn.ghost', { onclick: addDemo }, icon('sparkle'), 'Beispielstück hinzufügen')),
     grid);
 
   async function handle(files) {
     for (const f of files) {
-      try { const s = await importFile(f); toast(`„${s.title}“ hinzugefügt`); }
+      try { const s = await importFile(f); toast(OMR_ACTIVE(s.status) ? `„${s.title}“ wird jetzt erkannt …` : `„${s.title}“ hinzugefügt`); }
       catch (e) { toast(e.message); }
     }
     refresh();
@@ -161,22 +184,27 @@ function list(root, ctx) {
     await handle([new File([blob], 'ode-an-die-freude.musicxml', { type: 'application/xml' })]);
   }
   async function refresh() {
-    const songs = await library.all();
+    let songs;
+    try { songs = await library.all(); } catch (e) { grid.innerHTML = ''; grid.append(h('div.empty', 'Bibliothek nicht erreichbar: ' + e.message)); return; }
+    if (!alive) return;
+    clearTimeout(pollTimer);
+    if (songs.some(s => OMR_ACTIVE(s.status))) pollTimer = setTimeout(refresh, 4000);
     grid.innerHTML = '';
     if (!songs.length) { grid.append(h('div.empty', 'Noch keine Stücke. Lade eine Datei hoch oder füge das Beispielstück hinzu.')); return; }
     songs.forEach((s, i) => {
-      const tagCls = s.status === 'omr-pending' ? '.wait' : s.type === 'midi' ? '.midi' : '.xml';
+      const tagCls = s.status !== 'ready' ? '.wait' : s.type === 'midi' ? '.midi' : '.xml';
       grid.append(h('div.song', { style: { '--i': i }, onclick: () => go('#/library/' + s.id) },
         h('h5', s.title),
         h('div.sub', s.meta || s.fileName),
         h('div.row', { style: { gap: '6px', marginTop: '4px' } },
           h('span.tag' + tagCls, TYPE_LABEL[s.type] || s.type),
-          s.status === 'omr-pending' ? h('span.tag.wait', 'Erkennung folgt') : '',
+          statusTag(s),
           h('span.sub', new Date(s.added).toLocaleDateString('de-DE'))),
         h('button.del', { 'aria-label': 'Löschen', onclick: async e => { e.stopPropagation(); if (confirm(`„${s.title}“ löschen?`)) { await library.remove(s.id); refresh(); } } }, icon('trash'))));
     });
   }
   refresh();
+  return () => { alive = false; clearTimeout(pollTimer); };
 }
 
 // ---------- Player ----------
@@ -194,18 +222,19 @@ function player(root, ctx, id) {
   const tempoIn = h('input', { type: 'range', min: 40, max: 150, step: 5, value: 100, oninput: () => { tempo = +tempoIn.value / 100; tempoLabel.textContent = tempoIn.value + ' %'; } });
   const handSeg = segmented([['both', 'Beide Hände'], ['0', 'Rechts'], ['1', 'Links']], 'both', v => { hand = v; if (mode === 'wait') { stopAll(); startWait(); } });
   const exportBtn = h('button.btn.ghost', { onclick: exportMidi, hidden: true }, icon('download'), 'MIDI');
+  const origBtn = h('button.btn.ghost', { onclick: () => showOriginal(), hidden: true }, icon('eye'), 'Original');
 
   root.append(
     h('section.stage.grow',
       h('div.player-bar', playBtn, practiceBtn, handSeg,
-        h('label.tempo', icon('metronome'), tempoIn, tempoLabel), h('span.spacer'), exportBtn),
+        h('label.tempo', icon('metronome'), tempoIn, tempoLabel), h('span.spacer'), origBtn, exportBtn),
       timeline, display,
       h('div.feedback', msg, h('div.stats', { style: { gridTemplateColumns: 'repeat(3, minmax(70px, 1fr))', flex: '0 0 auto' } },
         h('div.stat', okEl, h('div.l', 'richtig')), h('div.stat', badEl, h('div.l', 'daneben')), h('div.stat', progEl, h('div.l', 'Fortschritt')))),
       kb.el));
 
   (async () => {
-    song = await library.get(id);
+    song = await library.get(id).catch(() => null);
     if (!song) { display.innerHTML = ''; display.append(h('div.empty', 'Stück nicht gefunden.')); return; }
     ctx.setTitle(song.title, TYPE_LABEL[song.type]);
     try {
@@ -213,6 +242,7 @@ function player(root, ctx, id) {
       else if (song.type === 'midi') await setupRoll();
       else return setupFile();
       exportBtn.hidden = false;
+      origBtn.hidden = !(library.remote && song.origType && song.origType !== song.type);
       const all = steps.flatMap(s => s.notes.map(n => n.midi));
       kb.fit(all);
       msg.textContent = `${steps.filter(s => s.notes.length).length} Schritte · ${Math.round(totalTime())} s`;
@@ -296,14 +326,60 @@ function player(root, ctx, id) {
     raf = requestAnimationFrame(draw);
     view = { kind: 'roll', goto() {}, reset() { viewT = 0; }, destroy() { cancelAnimationFrame(raf); } };
   }
+  let omrTimer = 0;
   function setupFile() {
     display.innerHTML = '';
-    const url = URL.createObjectURL(new Blob([song.data], { type: song.type === 'pdf' ? 'application/pdf' : 'image/*' }));
-    display.append(
-      h('div.info-box', { style: { marginBottom: '12px' } }, h('b', 'Notenerkennung folgt: '), 'Diese Datei ist gespeichert. Sobald der Raspberry-Pi-Server läuft, wird sie automatisch in MusicXML/MIDI umgewandelt (z. B. mit Audiveris) und erscheint dann hier zum Mitspielen.'),
-      song.type === 'pdf' ? h('iframe', { src: url, style: { width: '100%', height: '60vh', border: 0, borderRadius: '14px', background: '#fff' } })
-        : h('img', { src: url, style: { maxWidth: '100%', borderRadius: '14px' } }));
     [playBtn, practiceBtn].forEach(b => b.disabled = true);
+    const url = URL.createObjectURL(new Blob([song.data], { type: song.type === 'pdf' ? 'application/pdf' : 'image/*' }));
+    const box = h('div');
+    const preview = song.type === 'pdf' ? h('iframe', { src: url, style: { width: '100%', height: '60vh', border: 0, borderRadius: '14px', background: '#fff' } })
+      : h('img', { src: url, style: { maxWidth: '100%', borderRadius: '14px' } });
+    display.append(box, preview);
+    const retry = label => h('button.btn.primary', { onclick: async () => {
+      try { song = Object.assign(song, await library.retryOmr(song.id)); renderStatus(); poll(); } catch (e) { toast(e.message); }
+    } }, icon('refresh'), label);
+    function renderStatus() {
+      box.innerHTML = '';
+      const st = song.status;
+      if (OMR_ACTIVE(st)) {
+        const stepsDef = [['Hochgeladen', 'done'], ['In der Warteschlange', st === 'omr-queued' ? 'cur' : 'done'], ['Noten werden erkannt (dauert 1–5 Minuten)', st === 'omr-running' ? 'cur' : ''], ['Bereit zum Mitspielen', '']];
+        box.append(h('div.info-box', { style: { marginBottom: '12px' } },
+          h('b', 'Notenerkennung läuft'),
+          h('div.omr-steps', stepsDef.map(([t, c]) => h('div.omr-step' + (c ? '.' + c : ''), h('span.d'), t))),
+          'Du kannst die Seite verlassen – das Stück erscheint fertig in deiner Bibliothek.'));
+      } else if (st === 'omr-failed') {
+        box.append(h('div.info-box', { style: { marginBottom: '12px' } }, h('b', 'Erkennung fehlgeschlagen: '), song.error || 'Unbekannter Fehler',
+          h('div.row', { style: { marginTop: '10px' } }, retry('Erneut versuchen'))));
+      } else if (account.user) {
+        box.append(h('div.info-box', { style: { marginBottom: '12px' } }, h('b', 'Noch nicht erkannt. '), 'Starte die Notenerkennung auf deinem Tonika-Server.',
+          h('div.row', { style: { marginTop: '10px' } }, retry('Jetzt erkennen'))));
+      } else {
+        box.append(h('div.info-box', { style: { marginBottom: '12px' } }, h('b', 'Notenerkennung: '),
+          account.server ? 'Melde dich oben rechts an und übernimm das Stück in dein Konto – dann wandelt der Server es automatisch in Noten um.'
+            : 'Öffne Tonika unter tonika.hohendorff.org und melde dich an – dort wandelt der Server PDFs und Fotos automatisch in Noten um.'));
+      }
+    }
+    function poll() {
+      clearTimeout(omrTimer);
+      if (!OMR_ACTIVE(song.status) || destroyed) return;
+      omrTimer = setTimeout(async () => {
+        try {
+          const m = await library.meta(song.id);
+          if (destroyed) return;
+          if (m.status === 'ready') { toast('Erkannt! 🎉'); go('#/library/' + song.id); return; }
+          if (m.status !== song.status) { Object.assign(song, m); renderStatus(); }
+        } catch {}
+        poll();
+      }, 4000);
+    }
+    renderStatus(); poll();
+  }
+  async function showOriginal() {
+    try {
+      const data = await library.original(song.id);
+      const url = URL.createObjectURL(new Blob([data], { type: song.origType === 'pdf' ? 'application/pdf' : 'image/jpeg' }));
+      sheet('Original', song.origType === 'pdf' ? h('iframe', { src: url, style: { width: '100%', height: '75vh', border: 0, borderRadius: '12px', background: '#fff' } }) : h('img', { src: url, style: { width: '100%', borderRadius: '12px' } }));
+    } catch (e) { toast(e.message); }
   }
 
   const totalTime = () => { const l = steps[steps.length - 1]; return l ? l.t + Math.max(0, ...l.notes.map(n => n.dur), 0) : 0; };
@@ -427,5 +503,5 @@ function player(root, ctx, id) {
   }
 
   const off = input.on('noteon', onNote);
-  return () => { destroyed = true; stopAll(); off(); kb.destroy(); view && view.destroy(); };
+  return () => { destroyed = true; clearTimeout(omrTimer); stopAll(); off(); kb.destroy(); view && view.destroy(); };
 }

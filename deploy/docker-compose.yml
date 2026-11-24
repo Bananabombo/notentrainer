@@ -1,14 +1,20 @@
-# Tonika auf dem Raspberry Pi: statischer nginx, nur lokal – öffentlich über den Cloudflare-Tunnel
+# Tonika auf dem Raspberry Pi: App + API (Login, Sync) + Notenerkennung – nur lokal, öffentlich über den Cloudflare-Tunnel
 services:
   tonika:
-    image: nginx:alpine
+    build: ../server
+    image: tonika-server
     container_name: tonika
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3300:80"
+      - "127.0.0.1:3300:8000"
+    env_file: .env                         # REGISTER_CODE=… (Einladungscode für neue Konten)
+    environment:
+      - TZ=Europe/Berlin
+      - OMR_JAVA_OPTS=-Xmx2g
     volumes:
-      - ..:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ..:/site:ro                        # die App selbst – Update per git pull, ohne Neustart
+      - ${TONIKA_DATA:-/home/adrian/Tonika-data}:/data   # Konten, Fortschritt, Noten
+    mem_limit: 3g
     logging:
       driver: "json-file"
-      options: { max-size: "5m", max-file: "2" }
+      options: { max-size: "10m", max-file: "3" }

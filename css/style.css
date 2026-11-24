@@ -423,3 +423,31 @@ select { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px soli
 
 /* ============ Jazz-Hub ============ */
 .hub { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+
+/* ============ Konto ============ */
+.account-btn .avatar, .avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-text); font-weight: 700; font-size: 13px; }
+.avatar.big { width: 52px; height: 52px; font-size: 22px; flex: none; }
+.account-card { display: flex; gap: 14px; align-items: center; padding: 16px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.account-card b { font-size: 17px; }
+.account-card .muted { font-size: 13px; margin-top: 3px; line-height: 1.45; }
+.auth-form { display: grid; gap: 10px; }
+.input { width: 100%; font: inherit; font-size: 15px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); outline: none; transition: border-color .2s, box-shadow .2s; }
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.btn.wide { width: 100%; justify-content: center; padding: 13px; }
+.form-msg { font-size: 13.5px; min-height: 1px; }
+.form-msg.bad { color: var(--bad); } .form-msg.ok { color: var(--ok); }
+.pw-box summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 12px; }
+.muted { color: var(--muted); }
+/* Erkennungs-Status in der Bibliothek */
+.tag.run { background: var(--accent-soft); color: var(--accent); }
+.tag.fail { background: var(--bad-soft); color: var(--bad); }
+.tag.run::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.omr-steps { display: grid; gap: 10px; margin: 6px 0 16px; }
+.omr-step { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 14px; }
+.omr-step .d { width: 10px; height: 10px; border-radius: 50%; background: var(--surface-3); flex: none; }
+.omr-step.done { color: var(--text); } .omr-step.done .d { background: var(--ok); }
+.omr-step.cur { color: var(--text); } .omr-step.cur .d { background: var(--accent); box-shadow: 0 0 0 0 var(--accent-soft); animation: pulseRing 1.4s infinite; }
+@keyframes pulseRing { 0% { box-shadow: 0 0 0 0 var(--accent-soft); } 100% { box-shadow: 0 0 0 10px transparent; } }
+.migrate { display: flex; align-items: center; gap: 12px; }
+.stage.migrate { flex-direction: row; align-items: center; flex-wrap: wrap; text-align: left; }
