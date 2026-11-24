@@ -129,7 +129,7 @@ def remove_junk_text(root: ET.Element) -> int:
                 words = [w for t in types for w in t.findall("words")]
                 if words and len(words) == sum(len(list(t)) for t in types):
                     txt = " ".join((w.text or "") for w in words).strip()
-                    if JUNK_WORD.match(txt):
+                    if JUNK_WORD.match(txt) or sum(c.isalpha() for c in txt) <= 1:
                         measure.remove(d); removed += 1
                     else:
                         for w in words:   # „Allegro moderato J“ → „Allegro moderato“ (J = gelesenes Notensymbol)
