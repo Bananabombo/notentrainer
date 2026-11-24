@@ -50,9 +50,17 @@ python3 -m http.server 8765
 ```
 Dann `http://localhost:8765` in Chrome öffnen.
 
-## Hosting auf dem Raspberry Pi
-`deploy/` enthält eine `docker-compose.yml` (nginx:alpine, `127.0.0.1:3300`), erreichbar über den Cloudflare-Tunnel. Update auf dem Pi: `git pull` – fertig, kein Build nötig.
+## Konto & Server (Raspberry Pi)
+Unter **tonika.hohendorff.org** läuft Tonika mit einem kleinen Server (`server/`, Python/FastAPI + SQLite):
 
-## Geplant: Server-Funktionen
-- Benutzerkonten mit Login, Fortschritt und Bibliothek pro Konto (heute: lokal im Browser)
-- Automatische Notenerkennung für PDF/Fotos (z. B. Audiveris → MusicXML → MIDI)
+- **Konten mit Login** (Argon2-Passwörter, Sitzungs-Cookie). Neue Konten brauchen einen Einladungscode (`REGISTER_CODE` in `deploy/.env`).
+- **Sync**: Fortschritt und Einstellungen pro Konto (neuester Stand gewinnt), Bibliothek liegt auf dem Server – auf jedem Gerät gleich. Stücke aus dem Browser lassen sich ins Konto übernehmen.
+- **Notenerkennung**: PDFs und Fotos werden im Hintergrund mit [Audiveris](https://github.com/Audiveris/audiveris) in MusicXML umgewandelt und sind danach spiel- und übbar (Original bleibt abrufbar). Am besten klappen gerade, scharfe Scans (300 dpi).
+
+Ohne Server (z. B. GitHub Pages) funktioniert alles weiter lokal im Browser.
+
+```bash
+cd ~/Tonika && git pull                                   # App-Update (sofort live)
+cd ~/Tonika/deploy && docker compose up -d --build        # nach Server-Änderungen
+```
+Daten liegen in `~/Tonika-data` (SQLite + Dateien).
