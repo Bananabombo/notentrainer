@@ -54,10 +54,17 @@ class Input {
 
   /** Ausgabe an das Digitalpiano (z. B. FP-30X), falls gewünscht und verfügbar */
   get midiOut() {
-    if (prefs.output === 'browser' || !this.outputs.length) return null;
-    const inNames = new Set(this.status.names);
-    return this.outputs.find(o => inNames.has(o.name)) || this.outputs[0];
+    if (prefs.output === 'browser' || !this.outputs || !this.outputs.length) return null;
+    // Nur den Ausgang des angeschlossenen Pianos nehmen (gleicher Name wie der Eingang).
+    // Virtuelle Ports (z. B. IAC-Bus am Mac) würden sonst den Klang „verschlucken“.
+    const norm = n => (n || '').toLowerCase().replace(/\b(midi|port|in|out|bluetooth|ble)\b|[^a-z0-9]/g, '');
+    const inNames = this.status.names.map(norm).filter(Boolean);
+    const match = this.outputs.find(o => inNames.includes(norm(o.name)));
+    if (match) return match;
+    return prefs.output === 'midi' ? this.outputs[0] : null;
   }
+  /** Wohin geht der Klang gerade? */
+  get soundTarget() { const o = this.midiOut; return o ? o.name : null; }
   sendNote(midi, vel, startMs, durMs, channel = 0) {
     const out = this.midiOut; if (!out) return false;
     const t0 = startMs ?? performance.now();

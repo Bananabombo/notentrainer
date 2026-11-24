@@ -5,7 +5,7 @@ import { audio } from './core/audio.js';
 import { prefs, progress } from './core/store.js';
 import { setNaming } from './core/music.js';
 
-export const VERSION = '0.2.1';
+export const VERSION = '0.2.2';
 
 const MODES = {
   notes:   { title: 'Noten lesen',   icon: 'note',   hue: 245, desc: 'Zufällige Noten im Violin- und Bassschlüssel erkennen und spielen.', load: () => import('./modes/notes.js') },
@@ -94,7 +94,7 @@ function statusPills() {
   update(input.status);
   const off = input.on('status', update);
   midi.onclick = () => deviceSheet();
-  mic.onclick = () => { audio.ensure(); input.status.mic ? input.stopMic() : input.startMic(); };
+  mic.onclick = () => { audio.unlock(); input.status.mic ? input.stopMic() : input.startMic(); };
   const wrap = h('div.row', midi, mic);
   // Abmelden, wenn die Kopfzeile verschwindet
   new MutationObserver((_, obs) => { if (!wrap.isConnected) { off(); obs.disconnect(); } }).observe(app, { childList: true });
@@ -141,6 +141,11 @@ function globalSettings() {
     field('Tonnamen', segmented([['de', 'Deutsch (H, B)'], ['en', 'International (B, B♭)']], prefs.naming, v => { prefs.naming = v; setNaming(v); toast('Wird beim nächsten Wechsel übernommen'); })),
     field('Klang der App', segmented([['auto', 'Automatisch'], ['midi', 'Digitalpiano'], ['browser', 'Browser']], prefs.output, v => { prefs.output = v; }),
       'Automatisch: Vorgespieltes kommt aus deinem Digitalpiano, wenn es per MIDI verbunden ist – sonst aus dem Browser. Begleitbands spielen immer im Browser.'),
+    h('button.btn', { onclick: () => {
+      audio.playNotes([60, 64, 67, 72], { dur: 0.5, arpeggio: 0.18 });
+      const t = input.soundTarget;
+      toast(t ? `Klang geht an „${t}“ – stell dort die Lautstärke ein` : (audio.running ? 'Klang kommt aus dem Browser' : 'Audio blockiert – tippe nochmal'));
+    } }, icon('play'), 'Klang testen'),
     field('Lautstärke (Browser)', (() => { const r = h('input', { type: 'range', min: 0, max: 1, step: 0.05 }); r.value = prefs.volume; r.oninput = () => audio.setVolume(+r.value); return r; })()),
     field('Mikrofon-Empfindlichkeit', (() => { const r = h('input', { type: 'range', min: 1, max: 10, step: 1 }); r.value = prefs.micSens; r.oninput = () => { prefs.micSens = +r.value; }; return r; })()),
     field('Erscheinungsbild', segmented([['auto', 'System'], ['light', 'Hell'], ['dark', 'Dunkel']], prefs.theme, v => { prefs.theme = v; applyTheme(); })),
@@ -186,7 +191,9 @@ async function keepAwake() {
   } catch {}
 }
 document.addEventListener('visibilitychange', keepAwake);
-document.addEventListener('pointerdown', () => { keepAwake(); audio.ensure(); }, { once: true });
+// Audio freischalten: Android/iOS erlauben das nur bei Touch-Ende/Klick/Taste (nicht bei pointerdown)
+const unlockAudio = () => { keepAwake(); if (!audio.running) audio.unlock(); };
+for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(ev, unlockAudio, { capture: true, passive: true });
 
 // ---------- Start ----------
 applyTheme();

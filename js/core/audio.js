@@ -36,6 +36,18 @@ class AudioEngine {
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     return ctx;
   }
+  /** Audio freischalten – muss aus einer echten Nutzergeste kommen (Klick, Touch-Ende, Taste) */
+  unlock() {
+    const ctx = this.ensure();
+    try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch {}
+    if (ctx.state !== 'running') {
+      ctx.resume().catch(() => {});
+      // stummer Puffer: weckt die Ausgabe auf iOS/Android zuverlässig
+      const b = ctx.createBufferSource(); b.buffer = ctx.createBuffer(1, 1, 22050); b.connect(ctx.destination); b.start(0);
+    }
+    return ctx;
+  }
+  get running() { return !!this.ctx && this.ctx.state === 'running'; }
   get now() { return this.ensure().currentTime; }
   setVolume(v) { prefs.volume = v; if (this.master) this.master.gain.value = v; }
 
@@ -167,7 +179,7 @@ class AudioEngine {
   // ---------- Vorspielen (bevorzugt über das Digitalpiano) ----------
   /** Spielt Töne zur Demonstration; über MIDI-Out, falls eingestellt, sonst im Browser */
   playNotes(midis, { at = 0, dur = 0.9, vel = 0.7, arpeggio = 0 } = {}) {
-    const ctx = this.ensure();
+    const ctx = this.unlock();
     midis.forEach((m, i) => {
       const delay = at + i * arpeggio;
       if (!input.sendNote(m, vel * 127, performance.now() + delay * 1000, dur * 1000)) this.piano(m, ctx.currentTime + delay + 0.01, dur, vel);
@@ -189,7 +201,7 @@ export class Sequencer {
   get beatDur() { return 60 / this.bpm; }
   timeOf(step) { return this.t0 + Math.floor(step / 2) * this.beatDur + (step % 2) * this.swing * this.beatDur; }
   start() {
-    const ctx = audio.ensure();
+    const ctx = audio.unlock();
     this.running = true;
     this.step = 0;
     this.t0 = ctx.currentTime + 0.15;

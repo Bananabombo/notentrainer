@@ -321,7 +321,7 @@ function player(root, ctx, id) {
   // ---------- Anhören ----------
   function startPlay() {
     stopAll();
-    audio.ensure();
+    audio.unlock();
     mode = 'play';
     if (pos >= steps.length - 1) pos = 0;
     startClock = audio.now + 0.1; startT = steps[pos] ? steps[pos].t : 0;
@@ -352,7 +352,7 @@ function player(root, ctx, id) {
   const mine = n => hand === 'both' || String(n.staff) === hand;
   function startWait() {
     stopAll();
-    audio.ensure();
+    audio.unlock();
     mode = 'wait';
     stats = { ok: 0, bad: 0 }; setNum(okEl, 0); setNum(badEl, 0);
     pos = 0; view.reset();

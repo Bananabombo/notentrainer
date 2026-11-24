@@ -13,6 +13,7 @@
   --accent: #4f46e5;
   --accent-soft: rgba(79, 70, 229, .12);
   --accent-text: #ffffff;
+  --on-strong: #ffffff;
   --ok: #16a34a;
   --ok-soft: rgba(22, 163, 74, .14);
   --bad: #dc2626;
@@ -38,7 +39,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0b0c10; --bg-glow: rgba(129, 140, 248, .10); --surface: #14161c; --surface-2: #1b1e25; --surface-3: #252933;
-    --line: rgba(255, 255, 255, .07); --line-strong: rgba(255, 255, 255, .14); --text: #eceef3; --muted: #8e93a4; --faint: #5d6272;
+    --line: rgba(255, 255, 255, .07); --line-strong: rgba(255, 255, 255, .14); --text: #eceef3; --muted: #8e93a4; --faint: #737889; --on-strong: #0b0c10;
     --accent: #818cf8; --accent-soft: rgba(129, 140, 248, .16); --accent-text: #0b0c10; --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .14);
     --bad: #f87171; --bad-soft: rgba(248, 113, 113, .14); --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .14); --info: #38bdf8;
     --paper: #f3f0e7; --key-white: #e9e8ec; --key-white-line: #9a9aa3; --key-black: #0a0a0d;
@@ -48,7 +49,7 @@
 }
 :root[data-theme="dark"] {
   --bg: #0b0c10; --bg-glow: rgba(129, 140, 248, .10); --surface: #14161c; --surface-2: #1b1e25; --surface-3: #252933;
-  --line: rgba(255, 255, 255, .07); --line-strong: rgba(255, 255, 255, .14); --text: #eceef3; --muted: #8e93a4; --faint: #5d6272;
+  --line: rgba(255, 255, 255, .07); --line-strong: rgba(255, 255, 255, .14); --text: #eceef3; --muted: #8e93a4; --faint: #737889; --on-strong: #0b0c10;
   --accent: #818cf8; --accent-soft: rgba(129, 140, 248, .16); --accent-text: #0b0c10; --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .14);
   --bad: #f87171; --bad-soft: rgba(248, 113, 113, .14); --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .14); --info: #38bdf8;
   --paper: #f3f0e7; --key-white: #e9e8ec; --key-white-line: #9a9aa3; --key-black: #0a0a0d;
@@ -165,6 +166,12 @@ button { font: inherit; color: inherit; }
   display: flex; align-items: center; justify-content: center; min-height: 190px;
   transition: box-shadow .35s var(--ease), transform .35s var(--ease);
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.04);
+  /* Notenpapier bleibt hell – auch im Dunkelmodus: daher eigene, dunkle Schriftfarben */
+  --text: #15161b; --muted: #6e7180; --faint: #a4a7b3; --line: rgba(22,24,40,.08); --line-strong: rgba(22,24,40,.16);
+  --accent: #4f46e5; --accent-soft: rgba(79,70,229,.12); --accent-text: #fff;
+  --ok: #16a34a; --ok-soft: rgba(22,163,74,.14); --bad: #dc2626; --bad-soft: rgba(220,38,38,.12); --warn: #d97706; --info: #0284c7;
+  --surface: #fff; --surface-2: #f1efe9; --surface-3: #e8e5dd;
+  color: var(--text); color-scheme: light;
 }
 .paper.ok { box-shadow: inset 0 0 0 2px var(--ok), 0 0 0 6px var(--ok-soft); }
 .paper.bad { box-shadow: inset 0 0 0 2px var(--bad), 0 0 0 6px var(--bad-soft); animation: shake .4s var(--ease); }
@@ -237,8 +244,8 @@ button { font: inherit; color: inherit; }
 .kbd-svg .bad { fill: var(--bad); filter: drop-shadow(0 0 6px var(--bad)); }
 .kbd-svg .tension { fill: var(--warn); }
 .kbd-c { font-size: 9px; fill: var(--faint); text-anchor: middle; pointer-events: none; font-family: var(--font); font-weight: 600; }
-.kbd-label { font-size: 10px; text-anchor: middle; pointer-events: none; font-weight: 700; fill: #15161b; font-family: var(--font); animation: fadeIn .25s var(--ease) both; }
-.kbd-label.on-black { fill: #fff; }
+.kbd-label { font-size: 10px; text-anchor: middle; pointer-events: none; font-weight: 700; fill: #15161b; paint-order: stroke; stroke: rgba(255,255,255,.9); stroke-width: 3px; stroke-linejoin: round; font-family: var(--font); animation: fadeIn .25s var(--ease) both; }
+.kbd-label.on-black { fill: #fff; stroke: rgba(10,10,14,.85); }
 
 /* ============ Formular-Elemente ============ */
 .seg { display: flex; background: var(--surface-2); border-radius: 12px; padding: 3px; gap: 2px; }
@@ -330,8 +337,7 @@ select { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px soli
 .circle-svg text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: var(--text); font-family: var(--serif); transition: fill .3s; }
 .circle-svg .seg.major text { font-size: 22px; font-weight: 500; }
 .circle-svg .seg.minor text { font-size: 15px; }
-.circle-svg .seg.sel text, .circle-svg .seg.right text, .circle-svg .seg.wrong text { fill: #fff; }
-:root[data-theme="dark"] .circle-svg .seg.sel text { fill: #0b0c10; }
+.circle-svg .seg.sel text, .circle-svg .seg.right text, .circle-svg .seg.wrong text { fill: var(--on-strong); }
 .circle-svg .sig { font-family: var(--font); font-size: 11.5px; fill: var(--muted); font-weight: 600; }
 .circle-center-title { font-family: var(--serif); font-size: 30px; }
 .key-info h2 { font-family: var(--serif); font-weight: 400; font-size: 44px; letter-spacing: -.02em; margin: 0; line-height: 1.05; }

@@ -269,7 +269,7 @@ export default {
     }
 
     function start() {
-      audio.ensure();
+      audio.unlock();
       resetScore();
       seq = new Sequencer({ bpm: set.bpm, swing: STYLES[set.style].swing, onStep });
       seq.start();
