@@ -57,7 +57,8 @@ async function route() {
   if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
     if (shared) shared.style.viewTransitionName = 'mode-title';
     const t = document.startViewTransition(swap);
-    t.finished.finally(() => document.querySelectorAll('[style*="view-transition-name"]').forEach(e => { e.style.viewTransitionName = ''; }));
+    t.ready.catch(() => {});
+    t.finished.catch(() => {}).finally(() => document.querySelectorAll('[style*="view-transition-name"]').forEach(e => { e.style.viewTransitionName = ''; }));
   } else swap();
 }
 
