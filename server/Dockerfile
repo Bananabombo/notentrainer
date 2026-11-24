@@ -20,7 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=audiveris /opt/audiveris /opt/audiveris
 COPY --from=audiveris /opt/tessdata /opt/tessdata
-ENV TESSDATA_PREFIX=/opt/tessdata AUDIVERIS=/opt/audiveris/bin/Audiveris
+# GDK_SCALE: verhindert, dass Audiveris im Batch-Modus GTK laden will
+ENV TESSDATA_PREFIX=/opt/tessdata AUDIVERIS=/opt/audiveris/bin/Audiveris GDK_SCALE=1
 RUN python3 -m venv /venv
 COPY requirements.txt /tmp/requirements.txt
 RUN /venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
