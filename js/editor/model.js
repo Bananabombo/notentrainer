@@ -654,9 +654,12 @@ export class Score {
     const p = kid(n, 'pitch'); if (!p) return;
     const step = txt(p, 'step'), octave = +txt(p, 'octave');
     const hasAcc = !!kid(n, 'accidental');
+    const oldAlter = +txt(p, 'alter', 0);
+    // Vorzeichen gehören zur Position im System: ausdrücklich gesetzte oder im Takt fortgeltende behalten
+    const keep = hasAcc || oldAlter !== (keyAlters(fifths)[step] || 0);
     let idx = STEPS.indexOf(step) + octave * 7 + steps;
     const ns = STEPS[((idx % 7) + 7) % 7], no = Math.floor(idx / 7);
-    const alter = hasAcc ? +txt(p, 'alter', 0) : (keyAlters(fifths)[ns] || 0);
+    const alter = keep ? oldAlter : (keyAlters(fifths)[ns] || 0);
     while (p.firstChild) p.removeChild(p.firstChild);
     p.appendChild(this.mk('step', [ns]));
     if (alter) p.appendChild(this.mk('alter', [String(alter)]));
