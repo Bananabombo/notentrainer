@@ -7,7 +7,7 @@ import { setNaming } from './core/music.js';
 import { initWake, ensure as ensureWake, release as releaseWake, wake } from './core/wake.js';
 import { onStats, activity, level, streakDays, todayStats, game, weakest } from './core/stats.js';
 
-export const VERSION = '0.5.1';
+export const VERSION = '0.6.0';
 
 const MODES = {
   notes:   { title: 'Noten lesen',   icon: 'note',   hue: 245, desc: 'Zufällige Noten im Violin- und Bassschlüssel erkennen und spielen.', load: () => import('./modes/notes.js') },
@@ -75,7 +75,7 @@ function shell(key, def, route) {
   const extra = h('div.row');
   const bar = h('header.topbar',
     h('button.icon-btn', { 'aria-label': 'Zurück', onclick: () => go(route.query.from ? '#/' + route.query.from : route.params.length ? '#/' + key : '#/') }, icon('back')),
-    title, extra, goalPill(), statusPills(), fullscreenBtn(), accountBtn(), gear);
+    title, extra, goalPill(), statusPills(), volumeBtn(), fullscreenBtn(), accountBtn(), gear);
   const body = h('main.screen');
   app.append(bar, body);
   return {
@@ -103,6 +103,24 @@ function statusPills() {
   const wrap = h('div.row', midi, mic);
   // Abmelden, wenn die Kopfzeile verschwindet
   new MutationObserver((_, obs) => { if (!wrap.isConnected) { off(); obs.disconnect(); } }).observe(app, { childList: true });
+  return wrap;
+}
+
+/** Lautstärke fürs Vorspielen – in jedem Modus oben erreichbar (Browser-Klang und Anschlagstärke am Digitalpiano) */
+function volumeBtn() {
+  const b = h('button.icon-btn.vol-btn', { 'aria-label': 'Lautstärke' }, icon('speaker'));
+  const val = h('span.vol-val');
+  const r = h('input', { type: 'range', min: 0, max: 1, step: 0.05, 'aria-label': 'Lautstärke Vorspielen' });
+  const pop = h('div.vol-pop', h('div.vol-head', 'Lautstärke Vorspielen', val), r, h('div.field-hint', 'Gilt für alles, was Tonika vorspielt – im Browser und am Digitalpiano. Dein eigenes Spiel bleibt gleich laut.'));
+  const upd = () => { val.textContent = Math.round(r.value * 100) + ' %'; };
+  r.oninput = () => { audio.setVolume(+r.value); upd(); document.querySelectorAll('input[aria-label="Lautstärke Vorspielen"]').forEach(x => { if (x !== r) x.value = r.value; }); };
+  const close = e => { if (!wrap.contains(e.target)) { pop.classList.remove('open'); document.removeEventListener('pointerdown', close); } };
+  b.onclick = () => {
+    r.value = prefs.volume ?? 0.8; upd();
+    pop.classList.toggle('open');
+    if (pop.classList.contains('open')) setTimeout(() => document.addEventListener('pointerdown', close), 0);
+  };
+  const wrap = h('div.vol-wrap', b, pop);
   return wrap;
 }
 
@@ -151,7 +169,7 @@ function globalSettings() {
       const t = input.soundTarget;
       toast(t ? `Klang geht an „${t}“ – stell dort die Lautstärke ein` : (audio.running ? 'Klang kommt aus dem Browser' : 'Audio blockiert – tippe nochmal'));
     } }, icon('play'), 'Klang testen'),
-    field('Lautstärke (Browser)', (() => { const r = h('input', { type: 'range', min: 0, max: 1, step: 0.05 }); r.value = prefs.volume; r.oninput = () => audio.setVolume(+r.value); return r; })()),
+    field('Lautstärke Vorspielen', (() => { const r = h('input', { type: 'range', min: 0, max: 1, step: 0.05, 'aria-label': 'Lautstärke Vorspielen' }); r.value = prefs.volume; r.oninput = () => audio.setVolume(+r.value); return r; })(), 'Browser-Klang und Anschlagstärke beim Vorspielen über das Digitalpiano.'),
     field('Mikrofon-Empfindlichkeit', (() => { const r = h('input', { type: 'range', min: 1, max: 10, step: 1 }); r.value = prefs.micSens; r.oninput = () => { prefs.micSens = +r.value; }; return r; })()),
     (() => {
       const state = h('span.wake-state');

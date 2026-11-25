@@ -2,3 +2,4 @@
 deploy/.env
 server/data/
 __pycache__/
+.claude/

@@ -49,7 +49,7 @@ class Input {
     const cmd = st & 0xf0;
     if (cmd === 0x90 && d2 > 0) this.noteOn(d1, d2, 'midi');
     else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) this.noteOff(d1, 'midi');
-    else if (cmd === 0xb0 && d1 === 64) this.emit('pedal', { down: d2 >= 64 });
+    else if (cmd === 0xb0 && d1 === 64) this.emit('pedal', { down: d2 >= 64, value: d2, t: performance.now() });
   }
 
   /** Ausgabe an das Digitalpiano (z. B. FP-30X), falls gewünscht und verfügbar */
@@ -67,8 +67,11 @@ class Input {
   get soundTarget() { const o = this.midiOut; return o ? o.name : null; }
   sendNote(midi, vel, startMs, durMs, channel = 0) {
     const out = this.midiOut; if (!out) return false;
+    // Lautstärke fürs Vorspielen: am Digitalpiano über die Anschlagstärke (die eigene Lautstärke bleibt unberührt)
+    const vol = prefs.volume ?? 0.8;
+    if (vol <= 0.01) return true;
     const t0 = startMs ?? performance.now();
-    out.send([0x90 | channel, midi, Math.max(1, Math.min(127, vel | 0))], t0);
+    out.send([0x90 | channel, midi, Math.max(1, Math.min(127, Math.round(vel * Math.pow(vol / 0.8, 0.7))))], t0);
     out.send([0x80 | channel, midi, 0], t0 + durMs);
     return true;
   }

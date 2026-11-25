@@ -2,9 +2,11 @@
 // PDF und Fotos: mit Konto erkennt der Tonika-Server sie automatisch (Audiveris) und liefert MusicXML zurück.
 import { h, icon, burst, toast, segmented, field, setNum, loadScript, sheet } from '../core/ui.js';
 import { input } from '../core/input.js';
-import { audio } from '../core/audio.js';
+import { audio, Metronome } from '../core/audio.js';
 import { Keyboard } from '../core/keyboard.js';
-import { library, account, bumpProgress, persisted } from '../core/store.js';
+import { library, account, bumpProgress, persisted, prefs } from '../core/store.js';
+import { musicXmlText } from '../core/unzip.js';
+import { scoreMarks, analyze } from '../core/perform.js';
 import { record } from '../core/stats.js';
 import { midiName } from '../core/music.js';
 import { playOrder, measuresFromOSMD, applyFixes, describeJumps } from '../core/repeats.js';
@@ -100,14 +102,54 @@ function stepsFromOSMD(osmd, fix) {
   let order, info = null;
   try { info = applyFixes(measuresFromOSMD(sheet), fix); order = playOrder(info); } catch (e) { console.warn('Wiederholungen nicht auswertbar', e); order = null; }
   if (!order || !order.length) order = ms.map((_, i) => i);
-  const steps = [];
+  const steps = [], beats = [];
   let tAcc = 0;
   for (const mi of order) {
-    for (const st of byMeasure.get(mi) || []) steps.push({ t: (tAcc + st.ts - startOf(mi)) * wholeSec, ci: st.ci, mi, notes: st.notes });
+    for (const st of byMeasure.get(mi) || []) steps.push({ t: (tAcc + st.ts - startOf(mi)) * wholeSec, ci: st.ci, mi, w: st.ts - startOf(mi), notes: st.notes });
+    // Schlagraster fürs Metronom (6/8, 9/8, 12/8 in punktierten Vierteln)
+    const ts = ms[mi].ActiveTimeSignature;
+    const { unit, perBar } = beatUnit(ts ? ts.Numerator : 4, ts ? ts.Denominator : 4);
+    const n = Math.max(1, Math.round(lenOf(mi) / unit));
+    for (let b = 0; b < n; b++) beats.push({ t: (tAcc + b * unit) * wholeSec, accent: b === 0 && n === perBar });
     tAcc += lenOf(mi);
   }
+  const ts0 = ms[0] && ms[0].ActiveTimeSignature;
+  const meter = beatUnit(ts0 ? ts0.Numerator : 4, ts0 ? ts0.Denominator : 4);
   const repeats = order.length !== ms.length || order.some((m, i) => m !== i);
-  return { steps, bpm, repeats, playedMeasures: order.length, jumps: info ? describeJumps(info) : null, measures: ms.length };
+  return { steps, bpm, beats, meter, repeats, playedMeasures: order.length, jumps: info ? describeJumps(info) : null, measures: ms.length };
+}
+function beatUnit(num, den) {
+  if (den === 8 && num % 3 === 0 && num >= 6) return { unit: 3 / 8, perBar: num / 3 };
+  return { unit: 1 / (den || 4), perBar: num || 4 };
+}
+/** Pixel-Positionen aller Cursor-Schritte vorab berechnen – dann ist das Weiterrücken beim Spielen kostenlos */
+function cursorPositions(osmd) {
+  const c = osmd.cursor, u = 10 * (osmd.zoom || 1), out = [], systems = new Map();
+  c.hide(); c.reset();
+  let guard = 0, prev = null;
+  while (!c.Iterator.EndReached && guard++ < 20000) {
+    let p = null;
+    try {
+      let best = null;
+      for (const ve of c.Iterator.CurrentVisibleVoiceEntries() || []) {
+        const g = c.getStaffEntryFromVoiceEntry(ve);
+        if (g && (!best || g.PositionAndShape.AbsolutePosition.x < best.PositionAndShape.AbsolutePosition.x)) best = g;
+      }
+      if (best) {
+        const sys = best.parentMeasure.ParentMusicSystem, sy = sys.PositionAndShape.AbsolutePosition.y;
+        const l0 = sys.StaffLines[0], l1 = sys.StaffLines[sys.StaffLines.length - 1];
+        const top = sy + l0.PositionAndShape.RelativePosition.y, bot = sy + l1.PositionAndShape.RelativePosition.y + l1.StaffHeight;
+        const pm = best.parentMeasure.PositionAndShape;
+        if (!systems.has(sys)) systems.set(sys, systems.size);
+        p = { x: best.PositionAndShape.AbsolutePosition.x * u, top: top * u, h: (bot - top) * u, mx: pm.AbsolutePosition.x * u, mw: pm.Size.width * u, sys: systems.get(sys) };
+      }
+    } catch {}
+    out.push(p || prev || { x: 0, top: 0, h: 0, mx: 0, mw: 0, sys: 0 });
+    prev = out[out.length - 1];
+    c.next();
+  }
+  c.reset();
+  return out;
 }
 function stepsFromMidi(buf) {
   const M = window.Midi.Midi || window.Midi;
@@ -237,34 +279,56 @@ function list(root, ctx) {
 }
 
 // ---------- Player ----------
+const sessions = persisted('library.sessions', {});
+const PLAYER_ICONS = {
+  volume: '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/>',
+  keys: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v9M12 5v9M16 5v9M8 14v5M12 14v5M16 14v5"/>',
+  focus: '<path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/><path d="M8 10h8M8 14h5"/>'
+};
+const picon = name => { const el = h('span.icon'); el.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${PLAYER_ICONS[name]}</svg>`; return el; };
+
 function player(root, ctx, id) {
   let song = null, steps = [], view = null, mode = 'idle', pos = 0, hand = 'both', tempo = 1, playTimer = null, raf = 0, destroyed = false;
   let satisfied = new Set(), stats = { ok: 0, bad: 0 }, startClock = 0, startT = 0, scheduled = [];
+  let rec = [], pedalEv = [], marks = null, anyMidi = false;
+  const metro = new Metronome();
   const kb = new Keyboard({ from: 36, to: 84 });
-  const display = h('div', h('div.spinner'));
+  const display = h('div.pl-display', h('div.spinner'));
   const timeline = h('div.timeline', h('div'));
   const okEl = h('div.v', '0'), badEl = h('div.v', '0'), progEl = h('div.v', '0%');
   const msg = h('div.msg.muted', '');
+  const pedalPill = h('span.pedal-pill', 'Pedal');
   const playBtn = h('button.btn.accent', { onclick: () => mode === 'play' ? stopAll() : startPlay() }, icon('play'), 'Anhören');
-  const practiceBtn = h('button.btn.primary', { onclick: () => mode === 'wait' ? stopAll() : startWait() }, icon('hand'), 'Üben');
+  const practiceBtn = h('button.btn.primary', { onclick: () => mode === 'wait' ? stopAll(true) : startWait() }, icon('hand'), 'Üben');
   const tempoLabel = h('span', '100 %');
-  const tempoIn = h('input', { type: 'range', min: 40, max: 150, step: 5, value: 100, oninput: () => { tempo = +tempoIn.value / 100; tempoLabel.textContent = tempoIn.value + ' %'; } });
+  const tempoIn = h('input', { type: 'range', min: 40, max: 150, step: 5, value: 100, oninput: () => {
+    tempo = +tempoIn.value / 100; tempoLabel.textContent = tempoIn.value + ' %';
+    if (mode === 'wait' && metro.running) metro.setBpm(metroBpm());
+  } });
   const handSeg = segmented([['both', 'Beide Hände'], ['0', 'Rechts'], ['1', 'Links']], 'both', v => { hand = v; if (mode === 'wait') { stopAll(); startWait(); } });
-  const exportBtn = h('button.btn.ghost', { onclick: exportMidi, hidden: true }, icon('download'), 'MIDI');
-  const origBtn = h('button.btn.ghost', { onclick: () => showOriginal(), hidden: true }, icon('eye'), 'Original');
-  const editBtn = h('button.btn.ghost', { onclick: () => go('#/library/' + id + '/edit'), hidden: true }, icon('edit'), 'Bearbeiten');
-  const jumpBtn = h('button.btn.ghost', { onclick: () => jumpSheet(), hidden: true }, icon('refresh'), 'Sprünge');
+  const metroBtn = h('button.btn.ghost.toggle-btn', { onclick: () => setMetro(!prefs.libMetro), title: 'Metronom' }, icon('metronome'), 'Metronom');
+  const volIn = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: prefs.volume ?? 0.8, oninput: () => audio.setVolume(+volIn.value), 'aria-label': 'Lautstärke Vorspielen' });
+  const kbBtn = h('button.btn.ghost.toggle-btn', { onclick: () => setKeyboard(!showKb), hidden: true, title: 'Klaviatur ein/aus' }, picon('keys'), 'Klaviatur');
+  const focusBtn = h('button.btn.ghost.toggle-btn', { onclick: () => setFocus(!document.body.classList.contains('focus-mode')), hidden: true, title: 'Nur die Noten anzeigen' }, picon('focus'), 'Notenansicht');
+  const histBtn = h('button.btn.ghost.sec', { onclick: () => historySheet(), hidden: true }, icon('chart'), 'Verlauf');
+  const exportBtn = h('button.btn.ghost.sec', { onclick: exportMidi, hidden: true }, icon('download'), 'MIDI');
+  const origBtn = h('button.btn.ghost.sec', { onclick: () => showOriginal(), hidden: true }, icon('eye'), 'Original');
+  const editBtn = h('button.btn.ghost.sec', { onclick: () => go('#/library/' + id + '/edit'), hidden: true }, icon('edit'), 'Bearbeiten');
+  const jumpBtn = h('button.btn.ghost.sec', { onclick: () => jumpSheet(), hidden: true }, icon('refresh'), 'Sprünge');
   const jumpFixes = persisted('library.jumpFixes', {});
-  let osmdRef = null, lastInfo = null;
+  let osmdRef = null, lastInfo = null, showKb = true;
 
-  root.append(
-    h('section.stage.grow',
-      h('div.player-bar', playBtn, practiceBtn, handSeg,
-        h('label.tempo', icon('metronome'), tempoIn, tempoLabel), h('span.spacer'), editBtn, jumpBtn, origBtn, exportBtn),
-      timeline, display,
-      h('div.feedback', msg, h('div.stats', { style: { gridTemplateColumns: 'repeat(3, minmax(70px, 1fr))', flex: '0 0 auto' } },
-        h('div.stat', okEl, h('div.l', 'richtig')), h('div.stat', badEl, h('div.l', 'daneben')), h('div.stat', progEl, h('div.l', 'Fortschritt')))),
-      kb.el));
+  const stage = h('section.stage.grow.player',
+    h('div.player-bar', playBtn, practiceBtn, handSeg,
+      h('label.tempo', icon('metronome'), tempoIn, tempoLabel), metroBtn,
+      h('label.tempo.vol', picon('volume'), volIn),
+      h('span.spacer'), kbBtn, focusBtn, histBtn, editBtn, jumpBtn, origBtn, exportBtn),
+    timeline, display,
+    h('div.feedback', msg, pedalPill, h('div.stats', { style: { gridTemplateColumns: 'repeat(3, minmax(70px, 1fr))', flex: '0 0 auto' } },
+      h('div.stat', okEl, h('div.l', 'richtig')), h('div.stat', badEl, h('div.l', 'daneben')), h('div.stat', progEl, h('div.l', 'Fortschritt')))),
+    kb.el);
+  root.append(stage);
+  setMetro(!!prefs.libMetro, true);
 
   (async () => {
     song = await library.get(id).catch(() => null);
@@ -275,6 +339,7 @@ function player(root, ctx, id) {
       else if (song.type === 'midi') await setupRoll();
       else return setupFile();
       exportBtn.hidden = false;
+      histBtn.hidden = false;
       origBtn.hidden = !(library.remote && song.origType && song.origType !== song.type);
       editBtn.hidden = !(song.type === 'mxl' || song.type === 'musicxml');
       const all = steps.flatMap(s => s.notes.map(n => n.midi));
@@ -291,14 +356,52 @@ function player(root, ctx, id) {
     }
   })();
 
+  // ---------- Ansicht: Klaviatur, Notenansicht, Metronom ----------
+  function setKeyboard(on) {
+    showKb = on;
+    if (view && view.kind === 'score') prefs.libKeyboard = on;
+    stage.classList.toggle('no-kb', !on);
+    kbBtn.classList.toggle('on', on);
+    if (view && view.kind === 'score') requestAnimationFrame(() => view.goto(pos, true));
+  }
+  function setFocus(on) {
+    document.body.classList.toggle('focus-mode', on);
+    focusBtn.classList.toggle('on', on);
+    const root = document.documentElement;
+    try {
+      if (on && !document.fullscreenElement && root.requestFullscreen) root.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      if (!on && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    } catch {}
+    if (view && view.kind === 'score') setTimeout(() => view.goto(pos, true), 350);
+  }
+  const onFsChange = () => { if (!document.fullscreenElement && document.body.classList.contains('focus-mode')) setFocus(false); };
+  document.addEventListener('fullscreenchange', onFsChange);
+  function setMetro(on, silent) {
+    prefs.libMetro = on;
+    metroBtn.classList.toggle('on', on);
+    if (silent) return;
+    if (!on) metro.stop();
+    else if (mode === 'wait') startFreeMetro();
+    else if (mode === 'play' && lastInfo && lastInfo.beats) metro.follow(lastInfo.beats, { startT: currentTime(), clock0: audio.now + 0.02, tempo });
+  }
+  const metroBpm = () => {
+    const m = lastInfo && lastInfo.meter || { unit: 1 / 4, perBar: 4 };
+    return (lastInfo ? lastInfo.bpm : 100) * tempo * (1 / 4) / m.unit;
+  };
+  function startFreeMetro() { metro.start({ bpm: metroBpm(), perBar: (lastInfo && lastInfo.meter || { perBar: 4 }).perBar }); }
+
   // ---------- Darstellungen ----------
   async function setupScore() {
     await loadScript(OSMD_URL);
     display.innerHTML = '';
     const box = h('div.score-box');
     display.append(box);
-    const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(box, { autoResize: true, backend: 'svg', drawTitle: true, followCursor: true, drawPartNames: false, cursorsOptions: [{ type: 0, color: '#4f46e5', alpha: 0.45, follow: true }] });
-    await osmd.load(song.type === 'mxl' ? binStr(song.data) : new TextDecoder().decode(song.data));
+    const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(box, { autoResize: false, backend: 'svg', drawTitle: true, followCursor: false, drawPartNames: false });
+    const xml = song.type === 'mxl' ? binStr(song.data) : new TextDecoder().decode(song.data);
+    await osmd.load(xml);
+    // Ansicht vor dem ersten Zeichnen festlegen (Breite der Noten hängt davon ab)
+    setKeyboard(prefs.libKeyboard === true);
+    kbBtn.hidden = false; focusBtn.hidden = false;
     osmd.render();
     osmdRef = osmd;
     const r = stepsFromOSMD(osmd, jumpFixes[song.id]);
@@ -306,24 +409,59 @@ function player(root, ctx, id) {
     jumpBtn.hidden = false;
     if (r.repeats) toast(`Mit Wiederholungen: ${r.playedMeasures} Takte`);
     if (r.jumps && r.jumps.jump === 'ds' && !r.jumps.segno && !jumpFixes[song.id]) setTimeout(() => toast('„D.S.“ gefunden, aber kein Segno – unter „Sprünge“ kannst du es nachtragen'), 2500);
-    osmd.cursor.show();
+    musicXmlText(song.data, song.type).then(t => { marks = scoreMarks(t); }).catch(() => { marks = null; });
+
+    // eigener Cursor: Positionen einmal berechnen, danach nur noch verschieben (kein Neuzeichnen, kein weiches Scrollen)
+    const bar = h('div.sc-cursor'), meas = h('div.sc-measure');
+    let posList = cursorPositions(osmd), curSys = -1, curCi = -1, anim = 0;
+    const attach = () => { box.append(meas, bar); };
+    attach();
+    const scrollTo = (y, smooth) => {
+      cancelAnimationFrame(anim);
+      const max = box.scrollHeight - box.clientHeight;
+      y = Math.max(0, Math.min(max, y));
+      if (!smooth || Math.abs(y - box.scrollTop) > box.clientHeight * 1.5) { box.scrollTop = y; return; }
+      const y0 = box.scrollTop, t0 = performance.now(), D = 170;
+      const stepA = now => { const k = Math.min(1, (now - t0) / D); box.scrollTop = y0 + (y - y0) * (1 - Math.pow(1 - k, 3)); if (k < 1) anim = requestAnimationFrame(stepA); };
+      anim = requestAnimationFrame(stepA);
+    };
+    let lastW = box.clientWidth, rzT = 0;
+    const ro = new ResizeObserver(() => {
+      if (Math.abs(box.clientWidth - lastW) < 24) return;
+      clearTimeout(rzT);
+      rzT = setTimeout(() => {
+        lastW = box.clientWidth;
+        try { osmd.render(); } catch (e) { console.warn(e); }
+        posList = cursorPositions(osmd); attach(); curSys = -1; curCi = -1;
+        view.goto(pos, true);
+      }, 250);
+    });
+    ro.observe(box);
     view = {
       kind: 'score',
-      cursorIndex: 0,
-      // i = Schritt in Abspielreihenfolge; der Cursor springt zur zugehörigen Stelle in den Noten
-      goto(i) {
-        const target = steps[i] ? steps[i].ci : 0;
-        if (target === this.cursorIndex) return;
-        const cur = osmd.cursor;
-        if (target < this.cursorIndex) { cur.reset(); this.cursorIndex = 0; }
-        const far = target - this.cursorIndex > 3;
-        if (far) cur.hide();
-        while (this.cursorIndex < target && !cur.Iterator.EndReached) { cur.next(); this.cursorIndex++; }
-        if (far) cur.show();
+      // i = Schritt in Abspielreihenfolge; Cursor und Taktmarkierung springen sofort an die Stelle
+      goto(i, force) {
+        const ci = steps[i] ? steps[i].ci : 0;
+        if (ci === curCi && !force) return;
+        const p = posList[ci]; if (!p) return;
+        const newSys = p.sys !== curSys;
+        const back = curCi >= 0 && ci < curCi;
+        bar.classList.toggle('jump', newSys || back);
+        bar.style.transform = `translate(${p.x - 2}px, ${p.top - 6}px)`; bar.style.height = (p.h + 12) + 'px';
+        meas.style.transform = `translate(${p.mx}px, ${p.top - 10}px)`; meas.style.width = p.mw + 'px'; meas.style.height = (p.h + 20) + 'px';
+        if (newSys || force) {
+          // aktuelle Zeile oben, damit die nächste schon darunter zu sehen ist
+          const forward = p.sys === curSys + 1 && !back;
+          scrollTo(p.sys === 0 ? 0 : p.top - Math.min(70, box.clientHeight * 0.1), forward && !force);
+          curSys = p.sys;
+        }
+        curCi = ci;
       },
-      reset() { osmd.cursor.reset(); this.cursorIndex = 0; },
-      destroy() { try { osmd.clear(); } catch {} }
+      flash(cls) { bar.classList.remove('ok', 'bad'); void bar.offsetWidth; bar.classList.add(cls); },
+      reset() { curSys = -1; curCi = -1; this.goto(0, true); },
+      destroy() { ro.disconnect(); cancelAnimationFrame(anim); try { osmd.clear(); } catch {} }
     };
+    view.reset();
   }
   async function setupRoll() {
     await loadScript(MIDI_URL);
@@ -341,12 +479,10 @@ function player(root, ctx, id) {
       g.clearRect(0, 0, W, H);
       const css = getComputedStyle(document.documentElement);
       const accent = css.getPropertyValue('--accent').trim(), ok = css.getPropertyValue('--ok').trim(), line = css.getPropertyValue('--line-strong').trim();
-      // Zielzeit: im Warte-Modus der aktuelle Schritt, sonst Uhr
       const target = mode === 'play' ? currentTime() : (steps[pos] ? steps[pos].t : 0);
       viewT += (target - viewT) * (mode === 'play' ? 1 : 0.18);
       const pps = 140;
       const hit = H - 6;
-      // Tastenpositionen der sichtbaren Klaviatur übernehmen (sie ist zentriert und kann schmaler sein)
       const kr = kb.svg.getBoundingClientRect(), cr = canvas.getBoundingClientRect();
       const scale = Math.min(kr.width / kb.width, kr.height / 120), off = kr.left - cr.left + (kr.width - kb.width * scale) / 2;
       const keyX = k => off + k.x * scale;
@@ -374,7 +510,7 @@ function player(root, ctx, id) {
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
-    view = { kind: 'roll', goto() {}, reset() { viewT = 0; }, destroy() { cancelAnimationFrame(raf); } };
+    view = { kind: 'roll', goto() {}, flash() {}, reset() { viewT = 0; }, destroy() { cancelAnimationFrame(raf); } };
   }
   let omrTimer = 0;
   function setupFile() {
@@ -429,7 +565,7 @@ function player(root, ctx, id) {
     const j = lastInfo.jumps || {}, fix = jumpFixes[song.id] || {};
     const num = (v, ph) => h('input.input', { type: 'number', min: 1, max: lastInfo.measures, placeholder: ph, value: v ?? '' });
     const segno = num(fix.segno ?? j.segno, 'z. B. 63'), jumpAt = num(fix.jumpAt ?? j.jumpAt, 'z. B. 126');
-    const toCoda = num(fix.toCoda ?? j.toCoda, 'z. B. 101'), coda = num(fix.coda ?? j.coda, 'z. B. 127');
+    const toCoda = num(fix.toCoda ?? j.toCoda, 'z. B. 100'), coda = num(fix.coda ?? j.coda, 'z. B. 127');
     const kind = segmented([['ds', 'D.S. (zum Segno)'], ['dc', 'D.C. (von vorn)']], fix.jump || j.jump || 'ds', v => { kindV = v; segno.disabled = v === 'dc'; });
     let kindV = fix.jump || j.jump || 'ds';
     const apply = f => {
@@ -478,8 +614,9 @@ function player(root, ctx, id) {
     audio.unlock();
     mode = 'play';
     if (pos >= steps.length - 1) pos = 0;
-    startClock = audio.now + 0.1; startT = steps[pos] ? steps[pos].t : 0;
+    startClock = audio.now + 0.12; startT = steps[pos] ? steps[pos].t : 0;
     view.goto(pos);
+    if (prefs.libMetro && lastInfo && lastInfo.beats) metro.follow(lastInfo.beats, { startT, clock0: startClock, tempo });
     playBtn.innerHTML = ''; playBtn.append(icon('stop'), 'Stopp');
     let i = pos;
     playTimer = setInterval(() => {
@@ -487,14 +624,13 @@ function player(root, ctx, id) {
       while (i < steps.length) {
         const s = steps[i];
         const at = startClock + (s.t - startT) / tempo;
-        if (at > now + 0.15) break;
+        if (at > now + 0.25) break;
         for (const n of s.notes) sound(n, at, n.dur / tempo);
         const idx = i;
         scheduled.push(setTimeout(() => {
           if (mode !== 'play') return;
           pos = idx; view.goto(idx); setProgress();
-          kb.clear('chord');
-          for (const n of steps[idx].notes) kb.flash(n.midi, 'chord', Math.max(120, n.dur / tempo * 1000));
+          if (showKb) { kb.clear('chord'); for (const n of steps[idx].notes) kb.flash(n.midi, 'chord', Math.max(120, n.dur / tempo * 1000)); }
         }, Math.max(0, (at - now) * 1000)));
         i++;
       }
@@ -509,9 +645,11 @@ function player(root, ctx, id) {
     audio.unlock();
     mode = 'wait';
     stats = { ok: 0, bad: 0 }; setNum(okEl, 0); setNum(badEl, 0);
+    rec = []; pedalEv = []; anyMidi = false;
     pos = 0; view.reset();
     practiceBtn.innerHTML = ''; practiceBtn.append(icon('stop'), 'Beenden');
-    msg.textContent = 'Spiel die markierten Töne – die App wartet auf dich.'; msg.className = 'msg muted';
+    msg.textContent = prefs.libMetro ? 'Spiel im Takt des Metronoms – die App wartet trotzdem auf dich.' : 'Spiel die markierten Töne – die App wartet auf dich.'; msg.className = 'msg muted';
+    if (prefs.libMetro) startFreeMetro();
     enterStep();
   }
   function enterStep() {
@@ -526,53 +664,131 @@ function player(root, ctx, id) {
     if (pos >= steps.length) return finish();
     view.goto(pos); setProgress();
     satisfied = new Set();
-    kb.clear('target'); kb.clear('chord'); kb.clearLabels();
+    if (showKb) { kb.clear('target'); kb.clear('chord'); kb.clearLabels(); }
     const s = steps[pos];
     for (const n of s.notes) {
-      if (mine(n)) { kb.mark(n.midi, 'target'); kb.label(n.midi, midiName(n.midi).replace(/\d+$/, '')); }
+      if (mine(n)) { if (showKb) { kb.mark(n.midi, 'target'); kb.label(n.midi, midiName(n.midi).replace(/\d+$/, '')); } }
       else sound(n, audio.now + 0.01, n.dur / tempo);
     }
   }
-  function onNote({ midi }) {
+  function onNote({ midi, vel, src }) {
     if (mode !== 'wait' || pos >= steps.length) return;
     const want = steps[pos].notes.filter(mine).map(n => n.midi);
-    if (want.includes(midi)) {
+    if (want.includes(midi) && !satisfied.has(midi)) {
+      const r = rec[pos] || (rec[pos] = { t: performance.now(), vels: [] });
+      if (src === 'midi') { r.vels.push(vel); anyMidi = true; }
       satisfied.add(midi);
       stats.ok++; setNum(okEl, stats.ok);
-      kb.unmark(midi, 'target'); kb.flash(midi, 'ok', 300);
+      if (showKb) { kb.unmark(midi, 'target'); kb.flash(midi, 'ok', 300); }
       if (want.every(m => satisfied.has(m))) {
+        view.flash('ok');
         const prev = steps[pos];
         pos++;
         const nxt = steps[pos];
-        // im Warte-Modus sofort weiter – mit kurzer rhythmischer Andeutung bei Pausen
+        // sofort weiter – nur bei Pausen eine kurze rhythmische Andeutung
         const gap = nxt ? Math.min(0.25, Math.max(0, (nxt.t - prev.t) / tempo - 0.4)) : 0;
-        playTimer = setTimeout(() => enterStep(), gap * 1000);
+        if (gap < 0.02) enterStep(); else playTimer = setTimeout(() => enterStep(), gap * 1000);
       }
-    } else {
+    } else if (!want.includes(midi)) {
       stats.bad++; setNum(badEl, stats.bad);
-      kb.flash(midi, 'bad', 500);
+      if (showKb) kb.flash(midi, 'bad', 500);
+      view.flash('bad');
+      if (!showKb) { msg.textContent = `daneben: ${midiName(midi)} – gesucht: ${want.filter(m => !satisfied.has(m)).map(midiName).join(' ')}`; msg.className = 'msg bad'; clearTimeout(msg._t); msg._t = setTimeout(() => { if (mode === 'wait') { msg.textContent = ''; msg.className = 'msg muted'; } }, 1600); }
     }
   }
-  function finish() {
+  function onPedal(e) {
+    pedalPill.classList.toggle('on', e.down);
+    if (mode === 'wait') pedalEv.push({ t: e.t || performance.now(), down: e.down });
+  }
+  function evaluate(complete) {
     const acc = stats.ok + stats.bad ? Math.round(100 * stats.ok / (stats.ok + stats.bad)) : 100;
+    const a = analyze({ steps, rec: anyMidi ? rec : rec.map(r => r && { ...r, vels: [] }), pedal: pedalEv, marks, bpm: lastInfo ? lastInfo.bpm : 100, setting: tempo });
+    const reached = steps[Math.min(pos, steps.length - 1)];
+    const ownTotal = steps.filter(s => s.notes.some(mine)).length;
+    const part = complete ? 1 : Math.min(1, rec.filter(Boolean).length / Math.max(1, ownTotal));
+    const entry = { d: Date.now(), acc, hand, set: Math.round(tempo * 100), part: Math.round(part * 100) / 100,
+      pct: a.tempo ? a.tempo.pct : null, bpm: a.tempo ? a.tempo.bpm : null, steady: a.tempo ? a.tempo.steady : null,
+      dyn: a.dyn ? a.dyn.score : null, ped: a.ped ? a.ped.score : null, sec: a.tempo ? a.tempo.seconds : null };
+    const list = sessions[song.id] ? [...sessions[song.id]] : [];
+    const prev = list.filter(e => e.hand === hand && e.part >= 0.9).slice(-1)[0];
+    if (a.notes >= 12) { list.push(entry); sessions[song.id] = list.slice(-80); }
+    return { acc, a, entry, prev, complete, upTo: reached ? reached.mi + 1 : null };
+  }
+  function finish() {
+    const r = evaluate(true);
     mode = 'idle';
+    metro.stop();
     kb.clear(); kb.clearLabels();
     pos = steps.length; setProgress();
-    msg.textContent = `Geschafft! ${acc} % Treffergenauigkeit 🎉`; msg.className = 'msg ok pop';
+    msg.textContent = `Geschafft! ${r.acc} % Treffergenauigkeit 🎉`; msg.className = 'msg ok pop';
     burst(display, { count: 34, spread: 200 });
-    bumpProgress('library', { total: 1, correct: acc >= 90 ? 1 : 0 });
-    record('library', song.id, { ok: acc >= 90, xp: 20 + Math.round(steps.length / 3 * acc / 100), label: song.title });
+    bumpProgress('library', { total: 1, correct: r.acc >= 90 ? 1 : 0 });
+    record('library', song.id, { ok: r.acc >= 90, xp: 20 + Math.round(steps.length / 3 * r.acc / 100), label: song.title });
     practiceBtn.innerHTML = ''; practiceBtn.append(icon('hand'), 'Nochmal üben');
+    setTimeout(() => !destroyed && resultSheet(r), 900);
   }
 
-  function stopAll() {
+  // ---------- Auswertung & Verlauf ----------
+  function resultSheet(r) {
+    const { a, entry, prev } = r;
+    const big = (v, l, sub) => h('div.res-stat', h('div.v', v), h('div.l', l), sub ? h('div.sub', sub) : '');
+    const cmp = (cur, old, unit, better = 1) => old == null || cur == null ? '' : (cur - old) * better > 0 ? h('span.up', `▲ ${Math.abs(cur - old)}${unit} ggü. letztem Mal`) : cur === old ? h('span.muted', 'wie letztes Mal') : h('span.down', `▼ ${Math.abs(cur - old)}${unit} ggü. letztem Mal`);
+    const items = list => h('ul.res-list', list.map(it => h('li' + (it.ok ? '.ok' : '.warn'), it.text)));
+    const t = a.tempo;
+    const content = [
+      !r.complete ? h('div.info-box', `Abgebrochen in Takt ${r.upTo} – ausgewertet wird, was du bis dahin gespielt hast.`) : '',
+      h('div.res-grid',
+        big(r.acc + ' %', 'Treffer', cmp(entry.acc, prev && prev.acc, ' %')),
+        t ? big('♩ = ' + t.bpm, `Tempo · ${t.pct} % vom Original`, cmp(t.pct, prev && prev.pct, ' %')) : '',
+        t ? big(t.steady + ' %', 'Gleichmäßigkeit', cmp(t.steady, prev && prev.steady, ' %')) : ''),
+      t ? h('p.res-note', t.hesMeasures.length ? `Gestockt hast du vor allem in Takt ${t.hesMeasures.join(', ')} – diese Stellen einzeln und langsam üben.` : 'Kein nennenswertes Stocken – schön flüssig!',
+        t.pct < t.target - 10 ? ` Eingestellt waren ${t.target} %, gespielt hast du ${t.pct} %.` : '') : '',
+      a.dyn ? h('div.res-sec', h('h4', 'Dynamik', a.dyn.score != null ? h('span.score', a.dyn.score + ' %') : ''), a.dyn.note ? h('p.muted', a.dyn.note) : '', items(a.dyn.items.slice(0, 7))) :
+        h('div.res-sec', h('h4', 'Dynamik'), h('p.muted', anyMidi ? 'Zu wenige Töne für eine Auswertung.' : 'Lautstärke wird nur über MIDI vom Digitalpiano ausgewertet.')),
+      a.ped ? h('div.res-sec', h('h4', 'Pedal', a.ped.score != null ? h('span.score', a.ped.score + ' %') : ''), a.ped.note ? h('p.muted', a.ped.note) : '', items(a.ped.items.slice(0, 6))) : '',
+      h('div.res-sec', h('h4', 'Verlauf'), chart(sessions[song.id] || [], hand)),
+      h('div.row', { style: { marginTop: '12px' } }, h('button.btn.primary', { onclick: () => { s.close(); startWait(); } }, icon('hand'), 'Nochmal üben'), h('button.btn.ghost', { onclick: () => s.close() }, 'Schließen'))
+    ];
+    const s = sheet(r.complete ? 'Auswertung' : 'Zwischenstand', content);
+  }
+  function historySheet() {
+    const list = sessions[song.id] || [];
+    const fmt = d => new Date(d).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+    const H = { both: 'beide', 0: 'rechts', 1: 'links' };
+    const best = list.filter(e => e.part >= 0.9 && e.acc >= 85).reduce((b, e) => (e.pct || 0) > (b ? b.pct || 0 : -1) ? e : b, null);
+    sheet('Verlauf', list.length ? [
+      best ? h('p.res-note', `Bestes Tempo bei mindestens 85 % Treffern: ♩ = ${best.bpm} (${best.pct} % vom Original), erreicht am ${fmt(best.d)}`) : '',
+      chart(list, hand),
+      h('div.res-table-wrap', h('table.res-table', h('tr', ['Datum', 'Hand', 'Treffer', 'Tempo', 'Gleichm.', 'Dynamik', 'Pedal'].map(x => h('th', x))),
+        list.slice(-15).reverse().map(e => h('tr', h('td', fmt(e.d) + (e.part < 0.9 ? ' ·' : '')), h('td', H[e.hand] || e.hand), h('td', e.acc + ' %'), h('td', e.pct != null ? e.pct + ' %' : '–'), h('td', e.steady != null ? e.steady + ' %' : '–'), h('td', e.dyn != null ? e.dyn + ' %' : '–'), h('td', e.ped != null ? e.ped + ' %' : '–'))))),
+      h('div.field-hint', 'Tempo in Prozent des notierten Tempos. · = nicht bis zum Ende gespielt.')
+    ] : h('p.muted', 'Noch keine Übungsdurchgänge. Starte „Üben“ – nach jedem Durchgang siehst du hier, wie sich Treffer und Tempo entwickeln.'));
+  }
+  function chart(all, hd) {
+    const list = all.filter(e => e.hand === hd).slice(-30);
+    if (list.length < 2) return h('p.muted', list.length ? 'Ab dem zweiten Durchgang (mit dieser Hand-Einstellung) erscheint hier die Entwicklung.' : 'Noch keine Durchgänge mit dieser Hand-Einstellung.');
+    const W = 560, Hh = 170, P = { l: 34, r: 12, t: 12, b: 22 };
+    const maxY = Math.max(110, ...list.map(e => e.pct || 0)) + 5;
+    const x = i => P.l + i * (W - P.l - P.r) / (list.length - 1), y = v => P.t + (1 - v / maxY) * (Hh - P.t - P.b);
+    const line = (f, cls) => { const pts = list.map((e, i) => f(e) != null ? [x(i), y(f(e))] : null).filter(Boolean); return pts.length > 1 ? `<path class="${cls}" d="M${pts.map(p => p.map(n => n.toFixed(1)).join(',')).join('L')}"/>` + pts.map(p => `<circle class="${cls}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3"/>`).join('') : ''; };
+    const grid = [0, 50, 100].map(v => `<line class="g" x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}"/><text x="${P.l - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join('');
+    const el = h('div.res-chart');
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Verlauf von Treffern und Tempo">${grid}${line(e => e.acc, 'acc')}${line(e => e.pct, 'tmp')}</svg>`;
+    el.append(h('div.res-legend', h('span.acc', 'Treffer %'), h('span.tmp', 'Tempo % vom Original')));
+    return el;
+  }
+
+  function stopAll(evaluateRun) {
+    const wasWait = mode === 'wait';
     clearInterval(playTimer); clearTimeout(playTimer); playTimer = null;
     scheduled.forEach(clearTimeout); scheduled = [];
+    metro.stop();
     input.allNotesOff();
     if (mode !== 'idle') { kb.clear('target'); kb.clear('chord'); kb.clearLabels(); }
     mode = 'idle';
     playBtn.innerHTML = ''; playBtn.append(icon('play'), 'Anhören');
     practiceBtn.innerHTML = ''; practiceBtn.append(icon('hand'), 'Üben');
+    if (evaluateRun && wasWait && rec.filter(Boolean).length >= 12) resultSheet(evaluate(false));
   }
   function exportMidi() {
     const blob = writeMidi(steps, song.title);
@@ -581,6 +797,12 @@ function player(root, ctx, id) {
     toast('MIDI-Datei erstellt');
   }
 
-  const off = input.on('noteon', onNote);
-  return () => { destroyed = true; clearTimeout(omrTimer); stopAll(); off(); kb.destroy(); view && view.destroy(); };
+  const off = input.on('noteon', onNote), offPedal = input.on('pedal', onPedal);
+  window.__tonikaPlayer = { steps: () => steps, pos: () => pos, mode: () => mode, mine: n => mine(n), marks: () => marks };
+  return () => {
+    delete window.__tonikaPlayer;
+    destroyed = true; clearTimeout(omrTimer); stopAll(); off(); offPedal(); kb.destroy(); view && view.destroy();
+    document.removeEventListener('fullscreenchange', onFsChange);
+    if (document.body.classList.contains('focus-mode')) { document.body.classList.remove('focus-mode'); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
+  };
 }

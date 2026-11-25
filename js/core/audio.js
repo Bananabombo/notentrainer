@@ -230,3 +230,53 @@ export class Sequencer {
     return setTimeout(fn, Math.max(0, ms));
   }
 }
+
+/**
+ * Metronom. Entweder frei laufend (bpm, Schläge pro Takt) oder entlang eines festen Schlagrasters
+ * (beats = [{ t, accent }], t in Sekunden bei Tempo 1) – dann synchron zu einer Wiedergabe.
+ */
+export class Metronome {
+  constructor() { this.running = false; this.onBeat = null; }
+  start({ bpm = 100, perBar = 4, at } = {}) {
+    this.stop();
+    const ctx = audio.unlock();
+    this.mode = 'free'; this.bpm = bpm; this.perBar = perBar;
+    this.n = 0; this.t0 = at ?? ctx.currentTime + 0.1;
+    this.running = true;
+    this.timer = setInterval(() => this.tick(), 25); this.tick();
+  }
+  /** Schläge eines Stücks ab Stückzeit startT abspielen; clock0 = AudioContext-Zeit von startT */
+  follow(beats, { startT = 0, clock0, tempo = 1 }) {
+    this.stop();
+    audio.unlock();
+    this.mode = 'grid'; this.beats = beats; this.tempo = tempo; this.startT = startT; this.clock0 = clock0;
+    this.i = beats.findIndex(b => b.t >= startT - 0.01); if (this.i < 0) this.i = beats.length;
+    this.running = true;
+    this.timer = setInterval(() => this.tick(), 25); this.tick();
+  }
+  setBpm(bpm) {
+    if (!this.running || this.mode !== 'free') { this.bpm = bpm; return; }
+    const tNext = this.t0 + this.n * 60 / this.bpm;
+    this.bpm = bpm; this.t0 = tNext - this.n * 60 / bpm;
+  }
+  tick() {
+    const ctx = audio.ctx; if (!ctx || !this.running) return;
+    const horizon = ctx.currentTime + 0.15;
+    if (this.mode === 'free') {
+      for (let t; (t = this.t0 + this.n * 60 / this.bpm) < horizon; this.n++) {
+        const accent = this.n % this.perBar === 0;
+        audio.click(t, accent);
+        if (this.onBeat) Sequencer.at(t, () => this.running && this.onBeat(accent));
+      }
+    } else {
+      while (this.i < this.beats.length) {
+        const b = this.beats[this.i];
+        const t = this.clock0 + (b.t - this.startT) / this.tempo;
+        if (t >= horizon) break;
+        if (t > ctx.currentTime - 0.02) audio.click(t, b.accent);
+        this.i++;
+      }
+    }
+  }
+  stop() { this.running = false; clearInterval(this.timer); }
+}
