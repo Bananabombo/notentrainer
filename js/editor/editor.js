@@ -81,7 +81,7 @@ export async function mountEditor(root, ctx, id) {
       addBtn,
       tb('+♪', 'Note dahinter einfügen (I)', () => act('Einfügen', n => score.duplicateGroup(n))),
       tb('✦̸', 'Zeichen an der Note entfernen (Staccato, Akzent, Triller, Fingersatz, Fermate)', () => act('Zeichen entfernen', n => { const k = score.clearOrnaments(n); toast(k ? 'Zeichen entfernt' : 'Keine Zeichen an dieser Note'); return n; })),
-      tb('𝄐', 'Fermate ein/aus (F … Umschalt+F)', () => act('Fermate', n => { score.toggleFermata(n); return n; })),
+      tb((() => { const e = document.createElement('span'); e.className = 'ed-ico'; e.innerHTML = '<svg viewBox="0 0 22 24" width="20" height="22"><path d="M3 16a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="11" cy="15" r="1.8" fill="currentColor"/></svg>'; return e; })(), 'Fermate ein/aus', () => act('Fermate', n => { score.toggleFermata(n); return n; })),
       tb('⌫', 'Löschen → Pause (Entf)', () => act('Löschen', n => score.deleteNote(n))),
       tb('✕', 'Ganz entfernen, Rest rückt nach (Umschalt+Entf)', () => act('Entfernen', n => score.removeGroup(n)))),
     h('div.ed-group', tb('Takt …', 'Takt bearbeiten (M)', () => measureSheet(), '.wide'), tb('Stück …', 'Titel, Komponist, Tempo', () => scoreSheet(), '.wide'),
