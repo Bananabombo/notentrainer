@@ -545,3 +545,54 @@ select { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px soli
 .st-badge .bi { font-size: 30px; }
 .st-badge b { display: block; font-size: 13.5px; margin-top: 4px; }
 .st-badge small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+/* ============ Noten-Editor ============ */
+.stage.ed { gap: 10px; }
+.ed-toolbar { display: flex; flex-wrap: wrap; gap: 8px; position: sticky; top: 0; z-index: 5; padding: 8px; margin: -6px -6px 0; border-radius: 16px; background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(8px); }
+.ed-group { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--surface-2); }
+.ed-group.right { margin-left: auto; }
+.ed-tool { min-width: 38px; height: 38px; padding: 0 9px; border: 0; border-radius: 9px; background: transparent; color: var(--text); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; transition: background .15s, transform .1s; }
+.ed-tool.wide { font-size: 13.5px; font-weight: 600; }
+.ed-tool:hover { background: var(--surface); }
+.ed-tool:active { transform: scale(.94); }
+.ed-tool.active { background: var(--accent); color: var(--accent-text); }
+.ed-statusbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 13.5px; min-height: 34px; }
+.ed-status b { font-weight: 650; }
+.ed-errs { display: flex; gap: 6px; align-items: center; }
+.ed-errcount { color: var(--bad); font-weight: 600; font-size: 13px; }
+.ed-ok { color: var(--ok); font-size: 13px; font-weight: 600; }
+.btn.sm { padding: 4px 10px; min-height: 0; }
+.ed-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.ed-layout.with-orig { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+@media (max-width: 900px) { .ed-layout.with-orig { grid-template-columns: minmax(0, 1fr); } }
+.ed-main { min-width: 0; }
+.ed-scorewrap { position: relative; max-height: 62vh; overflow: auto; border-radius: 16px; background: var(--paper); color: #111; }
+.ed-score { min-height: 200px; }
+.ed-score svg { display: block; }
+.ed-note { cursor: pointer; }
+.ed-note:hover path, .ed-note:hover ellipse { fill: #4f46e5aa; stroke: #4f46e5aa; }
+.ed-sel, .ed-sel path { fill: #4f46e5 !important; stroke: #4f46e5 !important; }
+.ed-selg path, .ed-selg rect { fill: #4f46e5 !important; stroke: #4f46e5 !important; }
+.ed-sel { filter: drop-shadow(0 0 4px #4f46e588); }
+.ed-overlay { position: absolute; inset: 0; pointer-events: none; }
+.ed-err { position: absolute; border-radius: 8px; background: rgba(220, 38, 38, .08); box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, .55); }
+.ed-msel { position: absolute; border-radius: 8px; background: rgba(79, 70, 229, .08); box-shadow: inset 0 0 0 2px rgba(79, 70, 229, .7); }
+.ed-pager { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+.ed-pager select, .ed-sec select { font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); }
+.ed-orig { display: flex; flex-direction: column; min-width: 0; border-radius: 16px; background: var(--surface-2); padding: 6px; }
+.ed-orig-bar { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 2px 4px 6px; }
+.ed-orig-bar .flip .icon { transform: rotate(180deg); }
+.ed-orig-view { max-height: 62vh; overflow: auto; border-radius: 12px; background: #fff; }
+.ed-orig-canvas { width: 100%; display: block; }
+.ed-mini { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--muted); cursor: pointer; margin-top: 6px; }
+.ed-kb { margin-top: 2px; }
+.ed-sec { margin-bottom: 18px; }
+.ed-sec h5 { margin: 0 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.row.wrap { flex-wrap: wrap; gap: 8px; }
+.btn.danger { color: var(--bad); }
+.input.sm { width: 80px; }
+.btn.pulse { animation: savePulse 2s infinite; }
+@keyframes savePulse { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } 50% { box-shadow: 0 0 0 6px var(--accent-soft); } }
+.ed-ico { display: inline-grid; place-items: center; line-height: 0; }
+.ed-draft { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--warn) 14%, var(--surface)); font-size: 13.5px; }
+.ed-loading { display: grid; place-items: center; gap: 12px; padding: 80px 0; }

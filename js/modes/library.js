@@ -155,6 +155,13 @@ export function writeMidi(steps, title) {
 export default {
   mount(root, ctx) {
     const id = ctx.route.params[0];
+    if (id && ctx.route.params[1] === 'edit') {
+      // Editor wird nachgeladen; Aufräumen auch dann, wenn man vorher schon weg ist
+      let cleanup = null, left = false;
+      root.append(h('div.ed-loading', h('div.spinner'), h('div.muted', 'Editor wird geladen …')));
+      import('../editor/editor.js').then(m => m.mountEditor(root, ctx, id)).then(fn => { cleanup = fn; if (left && fn) fn(); });
+      return () => { left = true; if (cleanup) cleanup(); };
+    }
     return id ? player(root, ctx, id) : list(root, ctx);
   }
 };
@@ -245,6 +252,7 @@ function player(root, ctx, id) {
   const handSeg = segmented([['both', 'Beide Hände'], ['0', 'Rechts'], ['1', 'Links']], 'both', v => { hand = v; if (mode === 'wait') { stopAll(); startWait(); } });
   const exportBtn = h('button.btn.ghost', { onclick: exportMidi, hidden: true }, icon('download'), 'MIDI');
   const origBtn = h('button.btn.ghost', { onclick: () => showOriginal(), hidden: true }, icon('eye'), 'Original');
+  const editBtn = h('button.btn.ghost', { onclick: () => go('#/library/' + id + '/edit'), hidden: true }, icon('edit'), 'Bearbeiten');
   const jumpBtn = h('button.btn.ghost', { onclick: () => jumpSheet(), hidden: true }, icon('refresh'), 'Sprünge');
   const jumpFixes = persisted('library.jumpFixes', {});
   let osmdRef = null, lastInfo = null;
@@ -252,7 +260,7 @@ function player(root, ctx, id) {
   root.append(
     h('section.stage.grow',
       h('div.player-bar', playBtn, practiceBtn, handSeg,
-        h('label.tempo', icon('metronome'), tempoIn, tempoLabel), h('span.spacer'), jumpBtn, origBtn, exportBtn),
+        h('label.tempo', icon('metronome'), tempoIn, tempoLabel), h('span.spacer'), editBtn, jumpBtn, origBtn, exportBtn),
       timeline, display,
       h('div.feedback', msg, h('div.stats', { style: { gridTemplateColumns: 'repeat(3, minmax(70px, 1fr))', flex: '0 0 auto' } },
         h('div.stat', okEl, h('div.l', 'richtig')), h('div.stat', badEl, h('div.l', 'daneben')), h('div.stat', progEl, h('div.l', 'Fortschritt')))),
@@ -268,11 +276,15 @@ function player(root, ctx, id) {
       else return setupFile();
       exportBtn.hidden = false;
       origBtn.hidden = !(library.remote && song.origType && song.origType !== song.type);
+      editBtn.hidden = !(song.type === 'mxl' || song.type === 'musicxml');
       const all = steps.flatMap(s => s.notes.map(n => n.midi));
       kb.fit(all);
       msg.textContent = `${steps.filter(s => s.notes.length).length} Schritte · ${Math.round(totalTime())} s`;
       const unsure = song.report && song.report.uncertain || [];
-      if (unsure.length) msg.textContent += ` · unsicher erkannt: Takt ${unsure.slice(0, 6).join(', ')}${unsure.length > 6 ? ' …' : ''}`;
+      if (unsure.length) {
+        msg.textContent += ` · unsicher erkannt: Takt ${unsure.slice(0, 6).join(', ')}${unsure.length > 6 ? ' …' : ''}`;
+        msg.append(' ', h('a', { href: '#/library/' + id + '/edit', style: { color: 'var(--accent)' } }, 'Im Editor korrigieren'));
+      }
     } catch (e) {
       console.error(e);
       display.innerHTML = ''; display.append(h('div.empty', 'Die Datei konnte nicht gelesen werden: ' + e.message));

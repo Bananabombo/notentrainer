@@ -7,7 +7,7 @@ import { setNaming } from './core/music.js';
 import { initWake, ensure as ensureWake, release as releaseWake, wake } from './core/wake.js';
 import { onStats, activity, level, streakDays, todayStats, game, weakest } from './core/stats.js';
 
-export const VERSION = '0.4.0';
+export const VERSION = '0.5.0';
 
 const MODES = {
   notes:   { title: 'Noten lesen',   icon: 'note',   hue: 245, desc: 'Zufällige Noten im Violin- und Bassschlüssel erkennen und spielen.', load: () => import('./modes/notes.js') },

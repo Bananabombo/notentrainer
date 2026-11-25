@@ -13,6 +13,8 @@ Web-App zum Klavierlernen am Digitalpiano (entwickelt für das Roland FP-30X) �
 | **Tonleitern** | Dur, Moll (natürlich/harmonisch/melodisch), Kirchentonarten, Pentatonik, Blues, Jazz-Skalen – Ton für Ton geführt |
 | **Improvisation** | Begleitband im Browser (Pop, Moll-Groove, Blues-Shuffle, Jazz ii–V–I, Moll ii–V–i, Jazz-Blues, Bossa) mit Live-Bewertung jedes Tons; Aufgaben „Nur Akkordtöne“ und „Leittöne auf die Eins“ |
 | **Jazz** | Shell- und Rootless-Voicings (A/B), Chord-Scales, Jazz-Progressionen |
+| **Fortschritt** | XP, Level, Tagesziel, Serie, 20 Abzeichen; Beherrschung je Note/Akkord/Tonleiter, Schwachstellen gezielt üben, Aktivitätskalender |
+| **Editor** | Erkannte Stücke korrigieren: Noten antippen, Tonhöhe per Klavier/Tastatur/Knöpfen, Dauer, Pausen, Akkorde, Haltebögen, Takte einfügen/löschen, Schlüssel (Noten bleiben an ihrem Platz), Tonart, Taktart, Wiederholungen, Volten, Segno/Coda; Rhythmusprüfung; Original daneben |
 | **Bibliothek** | MusicXML/MXL und MIDI hochladen, als Noten (OpenSheetMusicDisplay) oder Piano-Roll anzeigen, anhören (auch über das Digitalpiano), im Warte-Modus mitspielen (je Hand), als MIDI exportieren |
 
 ## Eingabe & Klang

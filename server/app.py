@@ -23,7 +23,8 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from musicxml_fix import clean_title, postprocess, read_mxl
+from musicxml_fix import clean_title, postprocess, read_mxl, write_mxl, rhythm_report
+import xml.etree.ElementTree as ET
 import pdf_meta
 
 DATA = Path(os.environ.get("DATA_DIR", "./data"))
@@ -298,7 +299,7 @@ async def upload_song(file: UploadFile = File(...), meta: str = Form(...), user=
 
 def current_file(uid: int, r) -> Path:
     d = song_dir(uid, r["id"])
-    if r["type"] != r["orig_type"] and (d / "score.mxl").exists():
+    if (d / "score.mxl").exists():
         return d / "score.mxl"
     return d / ("original" + EXT[r["orig_type"]])
 
@@ -310,6 +311,47 @@ def song_file(sid: str, orig: int = 0, user=Depends(current_user)):
     if not p.exists():
         raise HTTPException(404, "Datei fehlt")
     return FileResponse(p, media_type="application/octet-stream")
+
+
+@app.put("/api/songs/{sid}/score")
+async def put_score(sid: str, request: Request, user=Depends(current_user)):
+    """Im Editor korrigierte Noten speichern (MusicXML). Die vorige Fassung wandert in den Verlauf."""
+    r = get_song(user["id"], sid)
+    raw = await request.body()
+    if len(raw) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Zu groß")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        raise HTTPException(400, "Kein gültiges MusicXML")
+    if root.tag != "score-partwise":
+        raise HTTPException(400, "Nur MusicXML (partwise) wird unterstützt")
+    d = song_dir(user["id"], sid)
+    d.mkdir(parents=True, exist_ok=True)
+    hist = d / "history"
+    if (d / "score.mxl").exists():
+        hist.mkdir(exist_ok=True)
+        shutil.copy(d / "score.mxl", hist / f"score-{now()}.mxl")
+        for old in sorted(hist.glob("score-*.mxl"))[:-20]:
+            old.unlink()
+    xml = raw.decode("utf-8")
+    write_mxl(d / "score.mxl", xml)
+    title = (root.findtext("movement-title") or root.findtext("work/work-title") or r["title"] or "").strip()
+    composer = (root.findtext("identification/creator[@type='composer']") or r["composer"] or "").strip()
+    bad = rhythm_report(root)
+    rep_path = d / "omr-report.json"
+    rep = {}
+    if rep_path.exists():
+        try:
+            rep = json.loads(rep_path.read_text())
+        except Exception:  # noqa: BLE001
+            rep = {}
+    rep.update({"uncertain": bad, "edited": now(), "measures": len(root.find("part").findall("measure")) if root.find("part") is not None else 0})
+    rep_path.write_text(json.dumps(rep))
+    base = re.sub(r"( · \d+ unsicher| · bearbeitet)", "", r["meta"] or "")
+    meta = (base + " · bearbeitet" + (f" · {len(bad)} unsicher" if bad else "")).strip(" ·")
+    q("UPDATE songs SET type='mxl', title=?, composer=?, meta=?, updated=? WHERE id=?", title[:200], composer[:200], meta[:200], now(), sid)
+    return song_json(get_song(user["id"], sid))
 
 
 @app.patch("/api/songs/{sid}")
