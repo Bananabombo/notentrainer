@@ -3,7 +3,7 @@
 // - pro Tag: Übungszeit, XP, Aufgaben; daraus Serie (Tage in Folge), Tagesziel, Level
 // - Abzeichen
 // Alles liegt in persisted()-Objekten → wird mit dem Konto synchronisiert.
-import { persisted } from './store.js';
+import { persisted, progress } from './store.js';
 
 export const items = persisted('stats.items', {});        // { mode: { key: Item } }
 export const days = persisted('stats.days', {});          // { 'YYYY-MM-DD': Day }
@@ -189,4 +189,11 @@ function checkBadges() {
   }
   if (got.length) game.badges = b;
   return got;
+}
+
+// Einmalig: bisherigen Fortschritt (vor Version 0.4) in XP umrechnen
+if (!game.migrated) {
+  const old = Object.values(progress || {}).reduce((a, p) => a + (p.correct || 0) * 3 + (p.total || 0), 0);
+  if (old && !game.xp) game.xp = old;
+  game.migrated = true;
 }
