@@ -33,6 +33,7 @@ const WINDOW = 16;           // so viele Takte auf einmal, wenn das Stück lang 
 export async function mountEditor(root, ctx, id) {
   const opts = persisted('editor.settings', { advance: true, follow: true, original: true, keyboard: true });
   let song = null, score = null, osmd = null, map = [], byEl = new Map(), sel = null, selMeasures = null, winStart = 0;
+  let addMode = false;
   let destroyed = false, renderSeq = 0, pdf = null, pdfPage = 0, origImg = null, playTimer = null, chordBuf = [], chordTimer = 0;
 
   // ---------- Aufbau ----------
@@ -62,6 +63,13 @@ export async function mountEditor(root, ctx, id) {
   const durBtns = DUR_LIST.map(t => { const b = tb(noteIcon(t), TYPE_NAME[t] + ' (' + Object.entries(DUR_KEYS).find(([, v]) => v === t)[0] + ')', () => act('Dauer', n => score.setDuration(n, t, 0))); b.dataset.type = t; return b; });
   const dotBtn = tb('•', 'Punktiert (.)', () => act('Punkt', n => { const i = score.noteInfo(n); score.setDuration(n, i.type || 'quarter', i.dots ? 0 : 1); }));
   const restBtn = tb(restIcon(), 'Note ↔ Pause (0)', () => act('Pause', n => score.noteInfo(n).rest ? score.toNote(n) : score.toRest(n)));
+  const addBtn = tb('+ Ton', 'Ton zum Akkord hinzufügen/entfernen (Umschalt+Tonname oder spielen)', () => setAddMode(!addMode), '.wide');
+  function setAddMode(on) {
+    addMode = on;
+    addBtn.classList.toggle('active', on);
+    if (on) toast('Spiel oder tippe einen Ton – er kommt zum Akkord dazu (vorhandene Töne werden entfernt)');
+    describe();
+  }
   const toolbar = h('div.ed-toolbar',
     h('div.ed-group', ...durBtns, dotBtn, restBtn),
     h('div.ed-group', tb('♭', 'Be (-)', () => act('Vorzeichen', n => score.setAlter(n, cur(n).alter === -1 ? 0 : -1), true)),
@@ -70,6 +78,7 @@ export async function mountEditor(root, ctx, id) {
     h('div.ed-group', tb('▲', 'Höher (↑)', () => act('Tonhöhe', n => score.stepPitch(n, 1), true)), tb('▼', 'Tiefer (↓)', () => act('Tonhöhe', n => score.stepPitch(n, -1), true)),
       tb('8va', 'Oktave höher (Umschalt+↑)', () => act('Oktave', n => score.stepPitch(n, 7), true)), tb('8vb', 'Oktave tiefer (Umschalt+↓)', () => act('Oktave', n => score.stepPitch(n, -7), true))),
     h('div.ed-group', tb('⁀', 'Haltebogen (T)', () => act('Haltebogen', n => { score.toggleTie(n); return n; })),
+      addBtn,
       tb('+♪', 'Note dahinter einfügen (I)', () => act('Einfügen', n => score.duplicateGroup(n))),
       tb('⌫', 'Löschen → Pause (Entf)', () => act('Löschen', n => score.deleteNote(n))),
       tb('✕', 'Ganz entfernen, Rest rückt nach (Umschalt+Entf)', () => act('Entfernen', n => score.removeGroup(n)))),
@@ -84,7 +93,8 @@ export async function mountEditor(root, ctx, id) {
   ctx.setSettings(() => [
     toggle('Nach Eingabe am Klavier zur nächsten Note springen', opts.advance, v => { opts.advance = v; }),
     toggle('Original automatisch mitblättern', opts.follow, v => { opts.follow = v; }),
-    h('div.field-hint', 'Tastatur: ←/→ Note wählen · ↑/↓ Tonhöhe · Umschalt+↑/↓ Oktave · A–G Tonname · 1–7 Dauer (5 = Viertel) · . Punkt · 0 Pause · + − = Vorzeichen · T Haltebogen · I Einfügen · Entf Löschen · M Takt · Strg+Z/Y · Strg+S Speichern. Am Klavier gespielte Töne ersetzen die gewählte Note (mehrere gleichzeitig = Akkord).')
+    h('div.field-hint', '„+ Ton“: Töne werden zum gewählten Akkord hinzugefügt; ein schon vorhandener Ton wird entfernt. Esc beendet den Modus.'),
+    h('div.field-hint', 'Tastatur: Umschalt+Tonname = Ton zum Akkord · ←/→ Note wählen · ↑/↓ Tonhöhe · Umschalt+↑/↓ Oktave · A–G Tonname · 1–7 Dauer (5 = Viertel) · . Punkt · 0 Pause · + − = Vorzeichen · T Haltebogen · I Einfügen · Entf Löschen · M Takt · Strg+Z/Y · Strg+S Speichern. Am Klavier gespielte Töne ersetzen die gewählte Note (mehrere gleichzeitig = Akkord).')
   ]);
 
   // ---------- Laden ----------
@@ -182,7 +192,7 @@ export async function mountEditor(root, ctx, id) {
           if (!hit) continue;
           used.add(hit.el);
           const g = gn.getSVGGElement && gn.getSVGGElement();
-          const entry = { el: hit.el, g, mi, staff, midi, gn };
+          const entry = { el: hit.el, g, mi, staff, midi, gn, onset };
           map.push(entry);
           if (g) { if (!byEl.has(g)) byEl.set(g, []); byEl.get(g).push(entry); g.classList.add('ed-note'); }
         }
@@ -248,10 +258,13 @@ export async function mountEditor(root, ctx, id) {
       const what = i.rest ? 'Pause' : `${NAMES_DE[i.step] + (i.alter === 1 ? 'is' : i.alter === -1 ? (i.step === 'B' ? '' : i.step === 'E' || i.step === 'A' ? 's' : 'es') : '')}${i.step === 'B' && i.alter === -1 ? 'B' : ''}${i.octave}`.replace(/^HB/, 'B');
       const loc = score.locate(sel);
       status.innerHTML = '';
+      if (addMode) status.append(h('span.ed-mode', '+ Ton'), ' ');
       status.append(h('b', `Takt ${mi + 1}`), ` · ${hand} · `, h('b', what), ` · ${TYPE_NAME[i.type] || '–'}${i.dots ? ' punktiert' : ''}${loc && loc.group.els.length > 1 ? ` · Akkord (${loc.group.els.length} Töne)` : ''}${i.tie.includes('start') ? ' · Haltebogen' : ''}`);
       durBtns.forEach(b => b.classList.toggle('active', b.dataset.type === i.type));
       dotBtn.classList.toggle('active', i.dots > 0); restBtn.classList.toggle('active', i.rest);
-      kb.clear('target'); if (!i.rest) kb.mark(i.midi, 'target');
+      kb.clear('target'); kb.clear('chord');
+      if (loc && loc.group.els.length > 1) for (const el of loc.group.els) { const x = score.noteInfo(el); if (!x.rest) kb.mark(x.midi, el === sel ? 'target' : 'chord'); }
+      else if (!i.rest) kb.mark(i.midi, 'target');
       followOriginal(mi);
     } else if (selMeasures) {
       status.innerHTML = '';
@@ -298,7 +311,7 @@ export async function mountEditor(root, ctx, id) {
     if (long() && (mi < winStart || mi >= winStart + WINDOW)) { winStart = Math.floor(mi / WINDOW) * WINDOW; render(false).then(() => selectMeasure(mi, scroll)); return; }
     sel = null; selMeasures = [mi, mi];
     // erste Note des Takts (oberes System) auswählen, damit man direkt loslegen kann
-    const first = map.filter(x => x.mi === mi).sort((a, b) => a.staff - b.staff || (a.gn.sourceNote.ParentStaffEntry?.Timestamp?.RealValue || 0) - (b.gn.sourceNote.ParentStaffEntry?.Timestamp?.RealValue || 0))[0];
+    const first = map.filter(x => x.mi === mi).sort((a, b) => a.staff - b.staff || a.onset - b.onset)[0];
     if (first) sel = first.el, selMeasures = null;
     applySelection();
     if (scroll) { const b = measureBox(mi); if (b) scoreWrap.scrollTo({ top: Math.max(0, b.y - 40), behavior: 'smooth' }); }
@@ -322,8 +335,7 @@ export async function mountEditor(root, ctx, id) {
       const i = sorted.indexOf(sel) + dir;
       if (i >= 0 && i < sorted.length) return select(sorted[i], true);
     }
-    const onset = en.gn.sourceNote.ParentStaffEntry?.relInMeasureTimestamp?.RealValue ?? 0;
-    const other = map.filter(x => x.mi === en.mi && x.staff === en.staff - dir).sort((a, b) => Math.abs((a.gn.sourceNote.ParentStaffEntry?.relInMeasureTimestamp?.RealValue ?? 0) - onset) - Math.abs((b.gn.sourceNote.ParentStaffEntry?.relInMeasureTimestamp?.RealValue ?? 0) - onset))[0];
+    const other = map.filter(x => x.mi === en.mi && x.staff === en.staff - dir).sort((a, b) => Math.abs(a.onset - en.onset) - Math.abs(b.onset - en.onset))[0];
     if (other) select(other.el, true);
   }
 
@@ -351,13 +363,13 @@ export async function mountEditor(root, ctx, id) {
   /** Auswahl als Position merken (Takt, System, Zeitpunkt) – überlebt Undo/Neuaufbau */
   function selPos() {
     const en = sel && entryOf(sel); if (!en) return null;
-    return { mi: en.mi, staff: en.staff, onset: en.gn.sourceNote.ParentStaffEntry?.relInMeasureTimestamp?.RealValue ?? 0, midi: en.midi };
+    return { mi: en.mi, staff: en.staff, onset: en.onset, midi: en.midi };
   }
   function reselect(pos) {
     if (!pos) return;
     const c = map.filter(x => x.mi === pos.mi && x.staff === pos.staff);
     if (!c.length) return;
-    const on = x => x.gn.sourceNote.ParentStaffEntry?.relInMeasureTimestamp?.RealValue ?? 0;
+    const on = x => x.onset;
     c.sort((a, b) => Math.abs(on(a) - pos.onset) - Math.abs(on(b) - pos.onset) || Math.abs((a.midi ?? 0) - (pos.midi ?? 0)) - Math.abs((b.midi ?? 0) - (pos.midi ?? 0)));
     sel = c[0].el; selMeasures = null; applySelection();
   }
@@ -380,6 +392,7 @@ export async function mountEditor(root, ctx, id) {
     const notes = [...new Set(chordBuf)].sort((a, b) => a - b); chordBuf = [];
     if (!sel || !notes.length) return;
     const target = sel;
+    if (addMode) return toggleChordNotes(target, notes);
     score.edit(notes.length > 1 ? 'Akkord' : 'Tonhöhe', () => {
       const loc = score.locate(target); if (!loc) return false;
       const first = loc.group.els[0];
@@ -392,6 +405,24 @@ export async function mountEditor(root, ctx, id) {
     saveDraft();
     await render();
     if (opts.advance) move(1);
+  }
+  /** Töne zum Akkord hinzufügen bzw. – wenn schon vorhanden – herausnehmen; Auswahl bleibt auf dem Akkord */
+  async function toggleChordNotes(target, notes) {
+    let added = 0, removed = 0, keep = target;
+    score.edit('Akkordton', () => {
+      for (const m of notes) {
+        const loc = score.locate(keep); if (!loc) return false;
+        const hit = loc.group.els.find(el => score.noteInfo(el).midi === m);
+        if (hit && loc.group.els.length > 1) { keep = score.deleteNote(hit) || keep; removed++; }
+        else if (!hit) { const n = score.addChordNote(keep, m); if (n) { added++; if (score.noteInfo(keep).rest) keep = n; } }
+      }
+      if (!added && !removed) return false;
+      const loc = score.locate(keep);
+      sel = loc ? loc.group.els[0] : keep;
+    });
+    saveDraft();
+    await render();
+    toast(added && !removed ? `${added > 1 ? added + ' Töne' : 'Ton'} hinzugefügt` : removed && !added ? `${removed > 1 ? removed + ' Töne' : 'Ton'} entfernt` : added || removed ? 'Akkord geändert' : 'Keine Änderung');
   }
   const offs = [input.on('noteon', onPlayed)];
 
@@ -413,7 +444,7 @@ export async function mountEditor(root, ctx, id) {
       Delete: () => e.shiftKey ? act('Entfernen', n => score.removeGroup(n)) : act('Löschen', n => score.deleteNote(n)),
       Backspace: () => act('Löschen', n => score.deleteNote(n)),
       t: () => act('Haltebogen', n => { score.toggleTie(n); return n; }), i: () => act('Einfügen', n => score.duplicateGroup(n)),
-      m: () => measureSheet(), ' ': () => togglePlay(), Escape: () => { sel = null; selMeasures = null; applySelection(); }
+      m: () => measureSheet(), ' ': () => togglePlay(), Escape: () => { if (addMode) return setAddMode(false); sel = null; selMeasures = null; applySelection(); }
     };
     if (map2[k]) { e.preventDefault(); map2[k](); return; }
     if (DUR_KEYS[k]) { e.preventDefault(); act('Dauer', n => score.setDuration(n, DUR_KEYS[k], 0)); return; }
@@ -421,6 +452,21 @@ export async function mountEditor(root, ctx, id) {
     if (/^[A-H]$/.test(L) && k.length === 1) {
       if (!sel) return;
       e.preventDefault();
+      if (e.shiftKey || addMode) {
+        // Ton zum Akkord: nächstgelegene Lage über dem höchsten Akkordton (bzw. darunter, wenn sehr hoch)
+        const de = prefs.naming !== 'en', step = L === 'H' ? 'B' : L;
+        const st = score.stateAt(score.measureIndexOf(sel));
+        const alter = de && L === 'B' ? -1 : de && L === 'H' ? 0 : (keyAltersOf(st.fifths)[step] || 0);
+        const loc = score.locate(sel);
+        const midis = loc ? loc.group.els.map(el => score.noteInfo(el).midi).filter(x => x != null) : [];
+        const top = midis.length ? Math.max(...midis) : 60;
+        const pcT = ({ C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[step] + alter + 12) % 12;
+        let m = top + 1; while (((m % 12) + 12) % 12 !== pcT) m++;
+        if (m > 96) m -= 12;
+        if (midis.includes(m - 12) || midis.includes(m)) { /* schon da → entfernen */ m = midis.find(x => ((x % 12) + 12) % 12 === pcT) ?? m; }
+        toggleChordNotes(sel, [m]);
+        return;
+      }
       // deutsch: H = h, B = b (also B♭); international: B = h
       const de = prefs.naming !== 'en';
       const step = L === 'H' ? 'B' : L;
