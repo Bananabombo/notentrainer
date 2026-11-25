@@ -850,6 +850,18 @@ export class Score {
     }
     return n;
   }
+  /** Fermate an der Note (bzw. am ganzen Akkord) ein-/ausschalten */
+  toggleFermata(noteEl) {
+    const loc = this.locate(noteEl);
+    const first = loc ? loc.group.els[0] : noteEl;
+    const nt0 = kids(first, 'notations')[0];
+    const has = nt0 && kids(nt0, 'fermata').length;
+    if (has) { for (const f of kids(nt0, 'fermata')) f.remove(); if (!nt0.children.length) nt0.remove(); return false; }
+    let nt = nt0 || this.insertOrdered(first, this.mk('notations'));
+    const staff = txt(first, 'staff', '1');
+    nt.appendChild(this.mk('fermata', [], { type: staff === '2' ? 'inverted' : 'upright' }));
+    return true;
+  }
   hasOrnaments(noteEl) {
     const loc = this.locate(noteEl);
     return (loc ? loc.group.els : [noteEl]).some(el => kids(el, 'notations').some(nt => [...nt.children].some(k => ['ornaments', 'technical', 'articulations', 'fermata'].includes(k.tagName))));
