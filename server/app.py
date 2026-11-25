@@ -349,6 +349,7 @@ async def put_score(sid: str, request: Request, user=Depends(current_user)):
     rep.update({"uncertain": bad, "edited": now(), "measures": len(root.find("part").findall("measure")) if root.find("part") is not None else 0})
     rep_path.write_text(json.dumps(rep))
     base = re.sub(r"( · \d+ unsicher| · bearbeitet)", "", r["meta"] or "")
+    base = re.sub(r"\d+ Takte", f"{rep['measures']} Takte", base)
     meta = (base + " · bearbeitet" + (f" · {len(bad)} unsicher" if bad else "")).strip(" ·")
     q("UPDATE songs SET type='mxl', title=?, composer=?, meta=?, updated=? WHERE id=?", title[:200], composer[:200], meta[:200], now(), sid)
     return song_json(get_song(user["id"], sid))
