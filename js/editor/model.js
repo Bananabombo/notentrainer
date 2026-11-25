@@ -628,8 +628,11 @@ export class Score {
       const [i, el] = flat[j];
       if (el !== anchor && el.tagName === 'attributes' && kids(el, 'clef').some(c => (c.getAttribute('number') || '1') === staff)) break;
       if (el.tagName === 'note' && txt(el, 'staff', '1') === staff && kid(el, 'pitch')) this.shiftNote(el, shift, this.stateAt(i, pi).fifths);
+      if (el.tagName === 'note' && txt(el, 'staff', '1') === staff && kid(el, 'rest')) this.resetRestPosition(el);
     }
   }
+  /** feste Pausen-Position (vom alten Schlüssel) entfernen – die Darstellung setzt sie neu */
+  resetRestPosition(n) { const r = kid(n, 'rest'); if (r) for (const k of [...r.children]) if (k.tagName === 'display-step' || k.tagName === 'display-octave') k.remove(); }
   clefBefore(noteEl, staff) {
     const m = noteEl.closest('measure'), pi = this.partIndexOf(m), mi = this.measuresOf(pi).indexOf(m);
     const st = this.stateAt(mi, pi);
@@ -842,14 +845,14 @@ export class Score {
     const els = loc ? loc.group.els : [noteEl];
     let n = 0;
     for (const el of els) for (const nt of kids(el, 'notations')) {
-      for (const k of [...nt.children]) if (['ornaments', 'technical', 'fermata', 'arpeggiate', 'non-arpeggiate'].includes(k.tagName)) { k.remove(); n++; }
+      for (const k of [...nt.children]) if (['ornaments', 'technical', 'articulations', 'fermata', 'arpeggiate', 'non-arpeggiate'].includes(k.tagName)) { k.remove(); n++; }
       if (!nt.children.length) nt.remove();
     }
     return n;
   }
   hasOrnaments(noteEl) {
     const loc = this.locate(noteEl);
-    return (loc ? loc.group.els : [noteEl]).some(el => kids(el, 'notations').some(nt => [...nt.children].some(k => ['ornaments', 'technical', 'fermata'].includes(k.tagName))));
+    return (loc ? loc.group.els : [noteEl]).some(el => kids(el, 'notations').some(nt => [...nt.children].some(k => ['ornaments', 'technical', 'articulations', 'fermata'].includes(k.tagName))));
   }
 
   // ------------------------------------------------------------ Kopfdaten

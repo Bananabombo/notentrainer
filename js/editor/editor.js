@@ -80,7 +80,7 @@ export async function mountEditor(root, ctx, id) {
     h('div.ed-group', tb('⁀', 'Haltebogen (T)', () => act('Haltebogen', n => { score.toggleTie(n); return n; })),
       addBtn,
       tb('+♪', 'Note dahinter einfügen (I)', () => act('Einfügen', n => score.duplicateGroup(n))),
-      tb('✦̸', 'Verzierungen & Fingersätze der Note entfernen', () => act('Verzierung entfernen', n => { const k = score.clearOrnaments(n); toast(k ? 'Verzierung entfernt' : 'Keine Verzierung an dieser Note'); return n; })),
+      tb('✦̸', 'Zeichen an der Note entfernen (Staccato, Akzent, Triller, Fingersatz, Fermate)', () => act('Zeichen entfernen', n => { const k = score.clearOrnaments(n); toast(k ? 'Zeichen entfernt' : 'Keine Zeichen an dieser Note'); return n; })),
       tb('⌫', 'Löschen → Pause (Entf)', () => act('Löschen', n => score.deleteNote(n))),
       tb('✕', 'Ganz entfernen, Rest rückt nach (Umschalt+Entf)', () => act('Entfernen', n => score.removeGroup(n)))),
     h('div.ed-group', tb('Takt …', 'Takt bearbeiten (M)', () => measureSheet(), '.wide'), tb('Stück …', 'Titel, Komponist, Tempo', () => scoreSheet(), '.wide'),
