@@ -290,7 +290,7 @@ const picon = name => { const el = h('span.icon'); el.innerHTML = `<svg viewBox=
 function player(root, ctx, id) {
   let song = null, steps = [], view = null, mode = 'idle', pos = 0, hand = 'both', tempo = 1, playTimer = null, raf = 0, destroyed = false;
   let satisfied = new Set(), stats = { ok: 0, bad: 0 }, startClock = 0, startT = 0, scheduled = [];
-  let rec = [], pedalEv = [], marks = null, anyMidi = false;
+  let rec = [], pedalEv = [], marks = null, anyMidi = false, pendingOther = [];
   const metro = new Metronome();
   const kb = new Keyboard({ from: 36, to: 84 });
   const display = h('div.pl-display', h('div.spinner'));
@@ -666,16 +666,20 @@ function player(root, ctx, id) {
     satisfied = new Set();
     if (showKb) { kb.clear('target'); kb.clear('chord'); kb.clearLabels(); }
     const s = steps[pos];
-    for (const n of s.notes) {
-      if (mine(n)) { if (showKb) { kb.mark(n.midi, 'target'); kb.label(n.midi, midiName(n.midi).replace(/\d+$/, '')); } }
-      else sound(n, audio.now + 0.01, n.dur / tempo);
-    }
+    // Töne der anderen Hand im selben Schritt erklingen erst mit dem ersten eigenen Ton – also gleichzeitig
+    pendingOther = s.notes.filter(n => !mine(n));
+    for (const n of s.notes) if (mine(n) && showKb) { kb.mark(n.midi, 'target'); kb.label(n.midi, midiName(n.midi).replace(/\d+$/, '')); }
+  }
+  function playPendingOther() {
+    const list = pendingOther; pendingOther = [];
+    for (const n of list) sound(n, audio.now + 0.005, n.dur / tempo);
   }
   function onNote({ midi, vel, src }) {
     if (mode !== 'wait' || pos >= steps.length) return;
     const want = steps[pos].notes.filter(mine).map(n => n.midi);
     if (want.includes(midi) && !satisfied.has(midi)) {
       const r = rec[pos] || (rec[pos] = { t: performance.now(), vels: [] });
+      if (pendingOther.length) playPendingOther();
       if (src === 'midi') { r.vels.push(vel); anyMidi = true; }
       satisfied.add(midi);
       stats.ok++; setNum(okEl, stats.ok);
@@ -780,6 +784,7 @@ function player(root, ctx, id) {
 
   function stopAll(evaluateRun) {
     const wasWait = mode === 'wait';
+    pendingOther = [];
     clearInterval(playTimer); clearTimeout(playTimer); playTimer = null;
     scheduled.forEach(clearTimeout); scheduled = [];
     metro.stop();
