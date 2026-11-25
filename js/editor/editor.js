@@ -33,7 +33,7 @@ const WINDOW = 16;           // so viele Takte auf einmal, wenn das Stück lang 
 export async function mountEditor(root, ctx, id) {
   const opts = persisted('editor.settings', { advance: true, follow: true, original: true, keyboard: true });
   let song = null, score = null, osmd = null, map = [], byEl = new Map(), sel = null, selMeasures = null, winStart = 0;
-  let addMode = false;
+  let addMode = false, clip = null;
   let destroyed = false, renderSeq = 0, pdf = null, pdfPage = 0, origImg = null, playTimer = null, chordBuf = [], chordTimer = 0;
 
   // ---------- Aufbau ----------
@@ -80,6 +80,7 @@ export async function mountEditor(root, ctx, id) {
     h('div.ed-group', tb('⁀', 'Haltebogen (T)', () => act('Haltebogen', n => { score.toggleTie(n); return n; })),
       addBtn,
       tb('+♪', 'Note dahinter einfügen (I)', () => act('Einfügen', n => score.duplicateGroup(n))),
+      tb('✦̸', 'Verzierungen & Fingersätze der Note entfernen', () => act('Verzierung entfernen', n => { const k = score.clearOrnaments(n); toast(k ? 'Verzierung entfernt' : 'Keine Verzierung an dieser Note'); return n; })),
       tb('⌫', 'Löschen → Pause (Entf)', () => act('Löschen', n => score.deleteNote(n))),
       tb('✕', 'Ganz entfernen, Rest rückt nach (Umschalt+Entf)', () => act('Entfernen', n => score.removeGroup(n)))),
     h('div.ed-group', tb('Takt …', 'Takt bearbeiten (M)', () => measureSheet(), '.wide'), tb('Stück …', 'Titel, Komponist, Tempo', () => scoreSheet(), '.wide'),
@@ -507,7 +508,11 @@ export async function mountEditor(root, ctx, id) {
       h('div.ed-sec', h('h5', 'Takte'), h('div.row.wrap',
         btn('+ Takt davor', () => measureAct('Takt einfügen', m => { const n = score.insertMeasure(m, false); selMeasures = [n, n]; sel = null; })),
         btn('+ Takt danach', () => measureAct('Takt einfügen', (m, e) => { const n = score.insertMeasure(e, true); selMeasures = [n, n]; sel = null; })),
+        btn('Takt duplizieren', () => measureAct('Takt duplizieren', m => { const n = score.duplicateMeasure(m); selMeasures = [n, n]; sel = null; })),
+        btn('Kopieren', async () => { clip = score.copyMeasureXml(a); toast(`Takt ${a + 1} kopiert`); }),
+        clip ? btn('Einfügen (ersetzt)', () => measureAct('Takt einfügen', (m, e) => { for (let i = m; i <= e; i++) score.pasteMeasure(clip, i); })) : '',
         btn(single ? 'Takt löschen' : 'Takte löschen', () => measureAct('Takt löschen', (m, e) => { for (let i = e; i >= m; i--) score.deleteMeasure(i); sel = null; selMeasures = [Math.min(m, score.measures.length - 1), Math.min(m, score.measures.length - 1)]; }), '.danger'))),
+      directionsSection(a, close),
       h('div.ed-sec', h('h5', 'Wiederholungen'), h('div.row.wrap',
         btn((score.hasRepeat(a, 'start') ? '✓ ' : '') + '|: Beginn', () => measureAct('Wiederholung', m => score.setRepeat(m, 'start', !score.hasRepeat(m, 'start')))),
         btn((score.hasRepeat(b, 'end') ? '✓ ' : '') + ':| Ende', () => measureAct('Wiederholung', (m, e) => score.setRepeat(e, 'end', !score.hasRepeat(e, 'end')))),
@@ -533,6 +538,24 @@ export async function mountEditor(root, ctx, id) {
       score.edit('Schlüssel', () => score.setClef(target, stf, sign, line, keep));
       saveDraft(); await render();
     }
+  }
+  /** Dynamik & Text des Takts: Liste mit Löschen/Ändern, neue hinzufügen */
+  function directionsSection(mi, close) {
+    const list = score.directions(mi);
+    const staffSel = segmented([['1', 'oben'], ['2', 'unten']], sel ? cur(sel).staff : '1', () => {});
+    const getStaff = () => staffSel.querySelector('.active')?.dataset.v || '1';
+    const dynSel = h('select', ['pp', 'p', 'mp', 'mf', 'f', 'ff', 'sf', 'sfz', 'fp', 'ppp', 'fff'].map(d => h('option', { value: d }, d)));
+    const words = h('input.input', { placeholder: 'Text, z. B. cresc., a tempo, dolce' });
+    const add = (spec, placement) => close(() => measureAct('Bezeichnung', m => score.addDirection(m, sel && score.measureIndexOf(sel) === m ? sel : null, spec, { placement, staff: getStaff() })))();
+    return h('div.ed-sec', h('h5', 'Dynamik & Text'),
+      list.length ? h('div.ed-dirs', list.map(d => h('div.ed-dir', h('span', d.label), h('span.muted', d.staff === '2' ? 'unten' : 'oben'), h('span.spacer'),
+        d.el.getElementsByTagName('words')[0] ? h('button.btn.ghost.sm', { onclick: () => { const t = prompt('Text ändern', d.el.getElementsByTagName('words')[0].textContent); if (t != null) close(() => measureAct('Text ändern', () => score.setWords(d.el, t)))(); } }, 'Ändern') : '',
+        h('button.btn.ghost.sm.danger', { onclick: close(() => measureAct('Bezeichnung entfernen', () => score.removeEl(d.el))) }, '✕')))) : h('div.muted', { style: { fontSize: '13px' } }, 'Keine Bezeichnungen in diesem Takt.'),
+      h('div.row.wrap', { style: { marginTop: '10px' } }, staffSel),
+      h('div.row.wrap', { style: { marginTop: '8px' } }, dynSel, h('button.btn', { onclick: () => add({ dynamic: dynSel.value }, 'below') }, '+ Dynamik'),
+        h('button.btn', { onclick: () => add({ wedge: 'crescendo' }, 'below') }, '+ <'), h('button.btn', { onclick: () => add({ wedge: 'diminuendo' }, 'below') }, '+ >'), h('button.btn', { onclick: () => add({ wedge: 'stop' }, 'below') }, 'Gabel-Ende')),
+      h('div.row.wrap', { style: { marginTop: '8px' } }, words, h('button.btn', { onclick: () => words.value.trim() && add({ words: words.value.trim() }, 'below') }, '+ unten'), h('button.btn', { onclick: () => words.value.trim() && add({ words: words.value.trim() }, 'above') }, '+ oben')),
+      h('div.field-hint', 'Neue Bezeichnungen kommen vor die gewählte Note (sonst an den Taktanfang).'));
   }
   function scoreSheet() {
     const t = h('input.input', { value: score.title }), c = h('input.input', { value: score.composer || song.composer || '' }), bpm = h('input.input', { type: 'number', min: 20, max: 400, value: score.tempo || '' });

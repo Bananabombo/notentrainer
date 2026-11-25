@@ -759,6 +759,96 @@ export class Score {
     });
   }
 
+  // ------------------------------------------------------------ Takte kopieren
+  /** Inhalt eines Takts als Vorlage (ohne Taktstrich-Zeichen, Sprünge, Seitenumbrüche, Taktanfangs-Attribute) */
+  measureTemplate(mi, pi = 0) {
+    const c = this.measuresOf(pi)[mi].cloneNode(true);
+    for (const el of [...c.children]) {
+      if (el.tagName === 'print' || el.tagName === 'barline') el.remove();
+      else if (el.tagName === 'attributes' && this.isAtMeasureStart(el)) el.remove();
+      else if (el.tagName === 'direction' && (el.getAttribute('tonika-jump') || el.getElementsByTagName('segno').length || el.getElementsByTagName('coda').length || [...el.getElementsByTagName('sound')].some(s => s.getAttribute('dalsegno') || s.getAttribute('dacapo') || s.getAttribute('tocoda') || s.getAttribute('fine')))) el.remove();
+    }
+    return c;
+  }
+  duplicateMeasure(mi) {
+    this.parts.forEach((p, pi) => { const t = this.measureTemplate(mi, pi); this.measuresOf(pi)[mi].after(t); });
+    this.renumber();
+    return mi + 1;
+  }
+  /** Noten eines Takts in einen anderen übernehmen (Taktstriche/Attribute des Ziels bleiben) */
+  pasteMeasure(fromXml, mi) {
+    const src = new DOMParser().parseFromString(fromXml, 'application/xml').documentElement;
+    this.parts.forEach((p, pi) => {
+      const parts = [...src.children];
+      const sm = parts[pi]; if (!sm) return;
+      const target = this.measuresOf(pi)[mi];
+      const keep = [...target.children].filter(el => el.tagName === 'print' || el.tagName === 'barline' || (el.tagName === 'attributes' && this.isAtMeasureStart(el)));
+      while (target.firstChild) target.removeChild(target.firstChild);
+      for (const k of keep.filter(e => e.tagName !== 'barline' || (e.getAttribute('location') === 'left'))) target.appendChild(k);
+      for (const el of [...sm.children]) target.appendChild(this.doc.importNode(el, true));
+      for (const k of keep.filter(e => e.tagName === 'barline' && e.getAttribute('location') !== 'left')) target.appendChild(k);
+      this.rebuild(target);
+    });
+  }
+  copyMeasureXml(mi) {
+    const wrap = this.doc.implementation.createDocument(null, 'clip', null);
+    this.parts.forEach((p, pi) => wrap.documentElement.appendChild(wrap.importNode(this.measureTemplate(mi, pi), true)));
+    return new XMLSerializer().serializeToString(wrap);
+  }
+
+  // ------------------------------------------------------------ Bezeichnungen (Dynamik, Text, Verzierungen)
+  directionLabel(d) {
+    const parts = [];
+    for (const dt of d.getElementsByTagName('direction-type')) for (const c of dt.children) {
+      if (c.tagName === 'dynamics') parts.push([...c.children].map(x => x.tagName === 'other-dynamics' ? x.textContent : x.tagName).join(''));
+      else if (c.tagName === 'words') parts.push('„' + c.textContent.trim() + '“');
+      else if (c.tagName === 'wedge') parts.push(c.getAttribute('type') === 'crescendo' ? '< cresc.-Gabel' : c.getAttribute('type') === 'diminuendo' ? '> dim.-Gabel' : 'Gabel-Ende');
+      else if (c.tagName === 'metronome') parts.push('♩ = ' + (c.getElementsByTagName('per-minute')[0]?.textContent || ''));
+      else if (c.tagName === 'pedal') parts.push('Pedal ' + (c.getAttribute('type') || ''));
+      else if (c.tagName === 'segno' || c.tagName === 'coda') parts.push(c.tagName === 'segno' ? 'Segno' : 'Coda');
+      else if (c.tagName === 'octave-shift') parts.push('8va');
+      else parts.push(c.tagName);
+    }
+    return parts.join(' ') || 'Bezeichnung';
+  }
+  directions(mi) {
+    const m = this.measures[mi];
+    return [...m.getElementsByTagName('direction')].map(d => ({ el: d, label: this.directionLabel(d), staff: txt(d, 'staff', '1'), placement: d.getAttribute('placement') || '' }));
+  }
+  removeEl(el) { const m = el.closest('measure'); el.remove(); if (m) this.rebuild(m); }
+  setWords(d, text) { const w = d.getElementsByTagName('words')[0]; if (w) w.textContent = text; }
+  /** Dynamik (p, mf, sf …) oder Text vor der gewählten Note (bzw. am Taktanfang) einfügen */
+  addDirection(mi, noteEl, { dynamic, words, wedge }, { placement = 'below', staff = '1' } = {}) {
+    const m = this.measures[mi];
+    const dt = this.mk('direction-type');
+    if (dynamic) { const dyn = this.mk('dynamics'); dyn.appendChild(/^(p|pp|ppp|pppp|f|ff|fff|ffff|mp|mf|sf|sfz|sffz|fp|rf|rfz|fz|sfp|sfpp)$/.test(dynamic) ? this.mk(dynamic) : this.mk('other-dynamics', dynamic)); dt.appendChild(dyn); }
+    else if (wedge) dt.appendChild(this.mk('wedge', [], { type: wedge }));
+    else dt.appendChild(this.mk('words', words, words && /^(cresc|dim|dolce|rit|riten|rall|a tempo|poco|espr|legato|leggiero|sempre)/i.test(words) ? { 'font-style': 'italic' } : {}));
+    const d = this.mk('direction', [dt, this.mk('staff', staff)], { placement });
+    if (dynamic) { const v = { pppp: 10, ppp: 20, pp: 36, p: 54, mp: 69, mf: 83, f: 98, ff: 112, fff: 126, sf: 110, sfz: 112, fp: 98 }[dynamic]; if (v) d.appendChild(this.mk('sound', [], { dynamics: String(v) })); }
+    const model = this.parse(m);
+    let placed = false;
+    if (noteEl) for (const v of model.voices) for (const it of v.items) if (it.kind === 'note' && it.els.includes(noteEl)) { it.pre.push(d); placed = true; }
+    if (!placed) { const v = model.voices.find(x => x.staff === staff) || model.voices[0]; if (v && v.items[0]) v.items[0].pre.push(d); else model.tail.unshift(d); }
+    this.write(m, model);
+    return d;
+  }
+  /** Verzierungen (Triller, Pralltriller …) und Fingersätze einer Note entfernen */
+  clearOrnaments(noteEl) {
+    const loc = this.locate(noteEl);
+    const els = loc ? loc.group.els : [noteEl];
+    let n = 0;
+    for (const el of els) for (const nt of kids(el, 'notations')) {
+      for (const k of [...nt.children]) if (['ornaments', 'technical', 'fermata', 'arpeggiate', 'non-arpeggiate'].includes(k.tagName)) { k.remove(); n++; }
+      if (!nt.children.length) nt.remove();
+    }
+    return n;
+  }
+  hasOrnaments(noteEl) {
+    const loc = this.locate(noteEl);
+    return (loc ? loc.group.els : [noteEl]).some(el => kids(el, 'notations').some(nt => [...nt.children].some(k => ['ornaments', 'technical', 'fermata'].includes(k.tagName))));
+  }
+
   // ------------------------------------------------------------ Kopfdaten
   get title() { return txt(this.root, 'movement-title') || this.root.querySelector('work > work-title')?.textContent || ''; }
   set title(v) {
