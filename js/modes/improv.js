@@ -5,6 +5,7 @@ import { audio, Sequencer } from '../core/audio.js';
 import { Keyboard } from '../core/keyboard.js';
 import { CHORDS, IV, ROOTS, transpose, pcOf, noteName, rootSymbol, scaleNotes, SCALES, pc, pick } from '../core/music.js';
 import { persisted, bumpProgress } from '../core/store.js';
+import { addXP } from '../core/stats.js';
 
 export const STYLES = {
   pop:       { name: 'Pop-Ballade',   sub: 'I – V – vi – IV',       bpm: 84,  swing: 0.5,  feel: 'pop',   scale: 'key', key: 'major',
@@ -285,6 +286,7 @@ export default {
       playBtn.className = 'btn accent big';
       const total = score.chord + score.scale + score.out;
       if (total > 10) bumpProgress('improv', { total: 1, correct: (score.chord + score.scale) / total > 0.8 ? 1 : 0 });
+      if (total > 10) addXP('improv', Math.round(score.chord * 0.5 + score.scale * 0.2 + score.guideHit * 2), { ok: 1, total: 1 });
     }
     function toggle_() { seq ? stop() : start(); }
 

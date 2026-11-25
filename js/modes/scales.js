@@ -6,6 +6,7 @@ import { Keyboard } from '../core/keyboard.js';
 import { drawStaff, COLORS } from '../core/staff.js';
 import { SCALES, ROOTS, CIRCLE, transpose, pcOf, midiOf, noteName, majorSignature, keyLabel, pc } from '../core/music.js';
 import { persisted, bumpProgress } from '../core/store.js';
+import { record } from '../core/stats.js';
 
 const GROUPS = [
   ['Grundlagen', ['major', 'minor', 'harmonic', 'melodic']],
@@ -159,6 +160,7 @@ export default {
       burst(paper, { count: 28, spread: 160 });
       const clean = errors === 0;
       bumpProgress('scales', { correct: clean ? 1 : 0, total: 1 });
+      record('scales', `${set.l}:${set.a}:${set.type}`, { ok: clean, ms: secs * 1000, xp: (clean ? 15 : 6) + seq.length, label: title.textContent });
       setMsg(clean ? `Fehlerfrei in ${secs.toFixed(1)} s! 🎉` : `Geschafft in ${secs.toFixed(1)} s · ${errors} Fehler`, 'ok');
       if (clean) toast('Sauber gespielt – weiter im Quintenzirkel?');
     }

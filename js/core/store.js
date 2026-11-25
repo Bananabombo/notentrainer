@@ -37,7 +37,8 @@ export const prefs = persisted('prefs', {
   output: 'auto',      // 'auto' | 'browser' | 'midi'
   theme: 'auto',       // 'auto' | 'light' | 'dark'
   micSens: 6,
-  volume: 0.8
+  volume: 0.8,
+  keepAwake: true
 });
 
 /** Fortschritt pro Modus */

@@ -5,6 +5,7 @@ import { audio } from '../core/audio.js';
 import { drawStaff } from '../core/staff.js';
 import { CIRCLE, IV, transpose, pcOf, midiOf, noteName, rootSymbol, majorSignature, scaleNotes, keyLabel, DIATONIC, SHARP_ORDER, FLAT_ORDER, LETTERS, pick, pc, CHORDS } from '../core/music.js';
 import { persisted, bumpProgress } from '../core/store.js';
+import { record } from '../core/stats.js';
 import { voiceChord } from './chords.js';
 import { go } from '../app.js';
 
@@ -179,6 +180,8 @@ export default {
       answered = true;
       if (ok) { S.hits++; S.streak++; bumpProgress('circle', { correct: 1, total: 1, streak: S.streak }); }
       else { S.fails++; S.streak = 0; bumpProgress('circle', { total: 1 }); }
+      const QT = { sigCount: 'Vorzeichen zählen', keyFromSig: 'Tonart aus Vorzeichen', relative: 'Paralleltonart', dominant: 'Dominante', subdominant: 'Subdominante', accOrder: 'Reihenfolge der Vorzeichen' };
+      record('circle', question.type, { ok, base: 4, streak: S.streak, label: QT[question.type] || question.type });
       if (el) burst(el, { count: ok ? 16 : 0 });
       quizMsg.className = 'msg pop ' + (ok ? 'ok' : 'bad');
       quizMsg.textContent = (ok ? 'Richtig! ' : 'Leider nein. ') + explain;

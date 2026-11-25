@@ -6,6 +6,7 @@ import { Keyboard } from '../core/keyboard.js';
 import { drawStaff, COLORS } from '../core/staff.js';
 import { CHORDS, VOICINGS, IV, IV_LABEL, ROOTS, NATURAL_ROOTS, transpose, pcOf, midiOf, noteName, rootSymbol, chordSymbol, matchChord, pick, pc } from '../core/music.js';
 import { persisted, bumpProgress } from '../core/store.js';
+import { record, addXP, pickAdaptive } from '../core/stats.js';
 
 const LEVELS = {
   1: { name: 'Dur & Moll (weiße Tasten)', types: ['maj', 'min'], roots: NATURAL_ROOTS },
@@ -42,7 +43,8 @@ export default {
     if (q.voicing && VOICINGS[q.voicing]) ctx.setTitle('Jazz-Voicings', VOICINGS[q.voicing].name);
 
     const S = { hits: 0, fails: 0, streak: 0 };
-    let cur = null, firstTry = true, locked = false, evalTimer = null, wrongTimer = null, lastChange = 0, waitRelease = false;
+    let cur = null, firstTry = true, locked = false, evalTimer = null, wrongTimer = null, lastChange = 0, waitRelease = false, shownAt = 0;
+    const keyOf = c => `${c.root.l},${c.root.a},${c.type}|${set.voicing}`;
 
     const symbol = h('div.chord-symbol');
     const name = h('div.chord-name');
@@ -94,10 +96,13 @@ export default {
     function next() {
       clearTimeout(evalTimer); clearTimeout(wrongTimer);
       const p = pool();
-      let n;
-      do { n = { root: pick(p.roots), type: pick(p.types) }; if (pcOf(n.root) === 6 && Math.random() < 0.5) n.root = { l: 4, a: -1 }; }
-      while (cur && n.type === cur.type && pcOf(n.root) === pcOf(cur.root));
-      cur = n; firstTry = true; locked = false; waitRelease = input.held.size > 0;
+      const cands = [];
+      for (const r of p.roots) for (const t of p.types) cands.push({ root: r, type: t });
+      cands.forEach(c => { c.key = keyOf(c); });
+      const only = q.only ? new Set(q.only.split(',')) : null;
+      const list = only ? cands.filter(c => only.has(c.key)) : cands;
+      const n = pickAdaptive('chords', list.length ? list : cands, { focus: only ? 0.9 : 0.6, exclude: cur && keyOf(cur) });
+      cur = { root: n.root, type: n.type }; firstTry = true; shownAt = performance.now(); locked = false; waitRelease = input.held.size > 0;
       kb.clear(); kb.clearLabels();
       tones.innerHTML = '';
       setMsg(VOICINGS[set.voicing] ? 'Greife das ' + VOICINGS[set.voicing].name.split(' (')[0] + '-Voicing.' : 'Greife den Akkord.', 'muted');
@@ -148,7 +153,7 @@ export default {
       if (set.display === 'staff') { symbol.hidden = false; name.hidden = false; }
       setMsg('So sieht er aus – jetzt du!', 'hint');
     }
-    function failOnce() { firstTry = false; S.fails++; S.streak = 0; bumpProgress('chords', { total: 1 }); stats(); }
+    function failOnce() { firstTry = false; S.fails++; S.streak = 0; bumpProgress('chords', { total: 1 }); record('chords', keyOf(cur), { ok: false, xp: 0, label: chordSymbol(cur.root, cur.type) + (VOICINGS[set.voicing] ? ' · ' + VOICINGS[set.voicing].name.split(' (')[0] : '') }); stats(); }
 
     function evaluate() {
       if (!cur || locked) return;
@@ -172,7 +177,8 @@ export default {
     }
     function success(held) {
       locked = true; clearTimeout(wrongTimer);
-      if (firstTry) { S.hits++; S.streak++; bumpProgress('chords', { correct: 1, total: 1, streak: S.streak }); }
+      if (firstTry) { S.hits++; S.streak++; bumpProgress('chords', { correct: 1, total: 1, streak: S.streak }); record('chords', keyOf(cur), { ok: true, base: 6, ms: performance.now() - shownAt, streak: S.streak, label: chordSymbol(cur.root, cur.type) + (VOICINGS[set.voicing] ? ' · ' + VOICINGS[set.voicing].name.split(' (')[0] : '') }); }
+      else addXP('chords', 2);
       kb.clear('hint');
       held.forEach(m => kb.mark(m, 'ok'));
       labelKeys(held);

@@ -5,6 +5,7 @@ import { input } from '../core/input.js';
 import { audio } from '../core/audio.js';
 import { Keyboard } from '../core/keyboard.js';
 import { library, account, bumpProgress, persisted } from '../core/store.js';
+import { record } from '../core/stats.js';
 import { midiName } from '../core/music.js';
 import { playOrder, measuresFromOSMD, applyFixes, describeJumps } from '../core/repeats.js';
 import { go } from '../app.js';
@@ -548,6 +549,7 @@ function player(root, ctx, id) {
     msg.textContent = `Geschafft! ${acc} % Treffergenauigkeit 🎉`; msg.className = 'msg ok pop';
     burst(display, { count: 34, spread: 200 });
     bumpProgress('library', { total: 1, correct: acc >= 90 ? 1 : 0 });
+    record('library', song.id, { ok: acc >= 90, xp: 20 + Math.round(steps.length / 3 * acc / 100), label: song.title });
     practiceBtn.innerHTML = ''; practiceBtn.append(icon('hand'), 'Nochmal üben');
   }
 

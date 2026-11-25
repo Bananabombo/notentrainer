@@ -5,6 +5,7 @@ import { Keyboard } from '../core/keyboard.js';
 import { drawStaff, COLORS } from '../core/staff.js';
 import { LETTERS, SEMI, noteName, spellMidi } from '../core/music.js';
 import { persisted, bumpProgress, progress } from '../core/store.js';
+import { record, addXP, pickAdaptive, weakest, mastery } from '../core/stats.js';
 
 // Diatonischer Index = Oktave*7 + Buchstabe (C4 = 28)
 const RANGES = {
@@ -19,7 +20,7 @@ const label = n => noteName(n.s) + n.octave;
 
 export default {
   mount(root, ctx) {
-    const set = persisted('notes.settings', { clef: 'treble', level: '2', accidentals: false, anyOctave: false, showName: true, keyboard: true });
+    const set = persisted('notes.settings', { clef: 'treble', level: '2', accidentals: false, anyOctave: false, showName: true, keyboard: true, focus: '0.6' });
     const misses = persisted('notes.misses', {});
     const S = { hits: 0, fails: 0, streak: 0, times: [] };
     let target = null, firstTry = true, shownAt = 0, locked = false, lastMidi = null, hint = false, timers = [];
@@ -51,6 +52,7 @@ export default {
       field('Schlüssel', segmented([['treble', 'Violin'], ['bass', 'Bass'], ['grand', 'Beide']], set.clef, v => { set.clef = v; next(); })),
       field('Tonumfang', segmented([['1', 'Im System'], ['2', '+1 Hilfslinie'], ['3', '+2 Hilfslinien']], set.level, v => { set.level = v; next(); })),
       toggle('Vorzeichen (♯ / ♭)', set.accidentals, v => { set.accidentals = v; next(); }),
+      field('Schwachstellen üben', segmented([['0.2', 'Locker'], ['0.6', 'Ausgewogen'], ['0.9', 'Gezielt']], set.focus, v => { set.focus = v; }), 'Noten, die noch nicht sitzen oder lange nicht dran waren, kommen öfter.'),
       toggle('Oktave egal', set.anyOctave, v => { set.anyOctave = v; }),
       toggle('Notenname nach Treffer zeigen', set.showName, v => { set.showName = v; }),
       toggle('Klaviatur anzeigen', set.keyboard, v => { set.keyboard = v; kbWrap.hidden = !v; }),
@@ -77,11 +79,10 @@ export default {
       return out;
     }
     function pickNote() {
-      const list = candidates().filter(n => n.midi !== lastMidi);
-      const w = list.map(n => 1 + 2 * (misses[keyOf(n)] || 0));
-      let r = Math.random() * w.reduce((a, b) => a + b, 0);
-      for (let i = 0; i < list.length; i++) { r -= w[i]; if (r <= 0) return list[i]; }
-      return list[list.length - 1];
+      const only = ctx.route.query.only ? new Set(ctx.route.query.only.split(',')) : null;
+      let list = candidates().filter(n => n.midi !== lastMidi).map(n => Object.assign(n, { key: keyOf(n) }));
+      if (only) { const f = list.filter(n => only.has(n.key)); if (f.length) list = f; }
+      return pickAdaptive('notes', list, { focus: only ? 0.9 : +set.focus });
     }
     function render(state = 'ink', played = null, cls = 'enter') {
       const notes = [{ keys: [{ s: target.s, octave: target.octave }], color: COLORS[state], cls, clef: target.clef }];
@@ -116,6 +117,7 @@ export default {
       const k = keyOf(target);
       misses[k] = Math.min(5, (misses[k] || 0) + 1);
       bumpProgress('notes', { total: 1 });
+      record('notes', k, { ok: false, xp: 0, label: label(target) + (target.clef === 'bass' ? ' (Bass)' : '') });
       stats();
     }
 
@@ -131,7 +133,8 @@ export default {
           const k = keyOf(target);
           if (misses[k]) { misses[k]--; if (!misses[k]) delete misses[k]; }
           bumpProgress('notes', { correct: 1, total: 1, streak: S.streak });
-        }
+          record('notes', k, { ok: true, ms: t, streak: S.streak, label: label(target) + (target.clef === 'bass' ? ' (Bass)' : '') });
+        } else addXP('notes', 1);
         S.times.push(t);
         kb.mark(midi, 'ok');
         paper.className = 'paper ok';
@@ -165,9 +168,7 @@ export default {
       setNum(sStreak, S.streak);
       setNum(sTime, S.times.length ? (S.times.reduce((a, b) => a + b, 0) / S.times.length / 1000).toFixed(1) + 's' : '–');
       setNum(sBest, (progress.notes && progress.notes.best) || 0);
-      const list = Object.entries(misses).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k]) => {
-        const [clef, d, a] = k.split(':'); return label(mkNote(+d, +a, clef)) + (clef === 'bass' ? ' (Bass)' : '');
-      });
+      const list = weakest('notes', 4).filter(w => w.m < 0.7).map(w => w.label || w.key);
       weak.innerHTML = '';
       if (list.length) weak.append('Übt sich noch: ', h('b', list.join(', ')));
     }
