@@ -134,7 +134,9 @@ export async function mountEditor(root, ctx, id) {
     return () => {};
   }
 
-  window.__tonikaEditor = { get score() { return score; }, get sel() { return sel; } };   // zur Fehlersuche
+  // Zugriff für Tests und Automatisierung (gleiche Funktionen wie die Knöpfe)
+  window.__tonikaEditor = { get score() { return score; }, get sel() { return sel; }, set sel(v) { sel = v; selMeasures = null; applySelection(); },
+    render: () => render(), save: () => save(), selectMeasure: mi => selectMeasure(mi), act: (label, fn) => act(label, fn), measureAct: (label, fn) => measureAct(label, fn) };
 
   // ---------- Darstellung ----------
   function long() { return score.measures.length > WINDOW + 8; }
