@@ -291,6 +291,9 @@ function player(root, ctx, id) {
   let song = null, steps = [], view = null, mode = 'idle', pos = 0, hand = 'both', tempo = 1, playTimer = null, raf = 0, destroyed = false;
   let satisfied = new Set(), stats = { ok: 0, bad: 0 }, startClock = 0, startT = 0, scheduled = [];
   let rec = [], pedalEv = [], marks = null, anyMidi = false, pendingOther = [];
+  // Einhand-Üben: geschätztes Spieltempo (Partiturzeit pro Echtzeit), danach richtet sich die Begleithand
+  let rate = 1, lastOwn = -1;
+  const pace = () => hand === 'both' ? tempo : rate;
   const metro = new Metronome();
   const kb = new Keyboard({ from: 36, to: 84 });
   const display = h('div.pl-display', h('div.spinner'));
@@ -646,9 +649,11 @@ function player(root, ctx, id) {
     mode = 'wait';
     stats = { ok: 0, bad: 0 }; setNum(okEl, 0); setNum(badEl, 0);
     rec = []; pedalEv = []; anyMidi = false;
+    rate = tempo; lastOwn = -1;
     pos = 0; view.reset();
     practiceBtn.innerHTML = ''; practiceBtn.append(icon('stop'), 'Beenden');
-    msg.textContent = prefs.libMetro ? 'Spiel im Takt des Metronoms – die App wartet trotzdem auf dich.' : 'Spiel die markierten Töne – die App wartet auf dich.'; msg.className = 'msg muted';
+    msg.textContent = prefs.libMetro ? 'Spiel im Takt des Metronoms – die App wartet trotzdem auf dich.'
+      : hand !== 'both' ? 'Spiel deine Hand – die andere passt sich deinem Tempo an.' : 'Spiel die markierten Töne – die App wartet auf dich.'; msg.className = 'msg muted';
     if (prefs.libMetro) startFreeMetro();
     enterStep();
   }
@@ -656,10 +661,10 @@ function player(root, ctx, id) {
     // Schritte ohne eigene Töne spielt die App selbst (andere Hand / Pausen) – im Rhythmus
     while (pos < steps.length && !steps[pos].notes.some(mine)) {
       const s = steps[pos];
-      for (const n of s.notes) sound(n, audio.now + 0.01, n.dur / tempo);
+      for (const n of s.notes) sound(n, audio.now + 0.01, n.dur / pace());
       const nxt = steps[pos + 1];
       pos++;
-      if (nxt) { view.goto(pos); setProgress(); playTimer = setTimeout(enterStep, Math.min(1500, (nxt.t - s.t) / tempo * 1000)); return; }
+      if (nxt) { view.goto(pos); setProgress(); playTimer = setTimeout(enterStep, Math.min(1500, (nxt.t - s.t) / pace() * 1000)); return; }
     }
     if (pos >= steps.length) return finish();
     view.goto(pos); setProgress();
@@ -672,12 +677,26 @@ function player(root, ctx, id) {
   }
   function playPendingOther() {
     const list = pendingOther; pendingOther = [];
-    for (const n of list) sound(n, audio.now + 0.005, n.dur / tempo);
+    for (const n of list) sound(n, audio.now + 0.005, n.dur / pace());
+  }
+  // Aus dem Abstand zweier eigener Einsätze das Tempo schätzen (gleitend, Zögern zählt nicht)
+  function trackRate(i, now) {
+    if (hand === 'both') return;
+    const prev = lastOwn; lastOwn = i;
+    if (prev < 0 || !rec[prev]) return;
+    const dScore = steps[i].t - steps[prev].t, dReal = (now - rec[prev].t) / 1000;
+    if (dScore < 0.08 || dReal < 0.04) return;
+    const inst = dScore / dReal;
+    if (inst < rate * 0.4) return; // Zögern/Suchen – nicht als Tempo werten
+    // längere Abstände sind verlässlicher → stärker gewichten (eine Note pro Takt passt sich schnell an)
+    const k = Math.min(0.8, 1 - Math.exp(-dScore / 1.2));
+    rate = Math.min(1.6, Math.max(0.3, rate * (1 - k) + Math.min(inst, rate * 1.8) * k));
   }
   function onNote({ midi, vel, src }) {
     if (mode !== 'wait' || pos >= steps.length) return;
     const want = steps[pos].notes.filter(mine).map(n => n.midi);
     if (want.includes(midi) && !satisfied.has(midi)) {
+      if (!rec[pos]) trackRate(pos, performance.now());
       const r = rec[pos] || (rec[pos] = { t: performance.now(), vels: [] });
       if (pendingOther.length) playPendingOther();
       if (src === 'midi') { r.vels.push(vel); anyMidi = true; }
@@ -690,7 +709,10 @@ function player(root, ctx, id) {
         pos++;
         const nxt = steps[pos];
         // sofort weiter – nur bei Pausen eine kurze rhythmische Andeutung
-        const gap = nxt ? Math.min(0.25, Math.max(0, (nxt.t - prev.t) / tempo - 0.4)) : 0;
+        let gap = nxt ? Math.min(0.25, Math.max(0, (nxt.t - prev.t) / tempo - 0.4)) : 0;
+        // Einhand: folgt ein Begleit-Schritt, kommt er im eigenen Tempo, gemessen ab dem eigenen Einsatz
+        if (nxt && hand !== 'both' && !nxt.notes.some(mine) && rec[pos - 1])
+          gap = Math.min(1.5, Math.max(0, rec[pos - 1].t / 1000 + (nxt.t - prev.t) / rate - performance.now() / 1000));
         if (gap < 0.02) enterStep(); else playTimer = setTimeout(() => enterStep(), gap * 1000);
       }
     } else if (!want.includes(midi)) {
@@ -803,7 +825,7 @@ function player(root, ctx, id) {
   }
 
   const off = input.on('noteon', onNote), offPedal = input.on('pedal', onPedal);
-  window.__tonikaPlayer = { steps: () => steps, pos: () => pos, mode: () => mode, mine: n => mine(n), marks: () => marks };
+  window.__tonikaPlayer = { steps: () => steps, pos: () => pos, mode: () => mode, mine: n => mine(n), marks: () => marks, rate: () => rate };
   return () => {
     delete window.__tonikaPlayer;
     destroyed = true; clearTimeout(omrTimer); stopAll(); off(); offPedal(); kb.destroy(); view && view.destroy();
